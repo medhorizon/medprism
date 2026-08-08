@@ -1,0 +1,41 @@
+{
+  "version": 1,
+  "skills": {
+    "academic-paper": {
+      "source": "imbad0202/academic-research-skills",
+      "sourceType": "github",
+      "skillPath": "academic-paper/SKILL.md",
+      "computedHash": "5e11238876b53c4edf2789b7d2bdf02c3cae2ed369503bb5fb1cedcaabe008db"
+    },
+    "latex-paper-en": {
+      "source": "bahayonghang/academic-writing-skills",
+      "sourceType": "github",
+      "skillPath": "academic-writing-skills/latex-paper-en/SKILL.md",
+      "computedHash": "582f1152518445479604271a14009a32657efa512deaba56ced7107b75418140"
+    },
+    "nature-citation": {
+      "source": "yuan1z0825/nature-skills",
+      "sourceType": "github",
+      "skillPath": "skills/nature-citation/SKILL.md",
+      "computedHash": "c6392824b9b6628d35dd8a3aebf7c1db35526bd255fe1399f20b60ced5e90650"
+    },
+    "nature-polishing": {
+      "source": "yuan1z0825/nature-skills",
+      "sourceType": "github",
+      "skillPath": "skills/nature-polishing/SKILL.md",
+      "computedHash": "f36f119dc6ba9dc392320a1cda18b1c0b860f89148e4fa3d4bf61780729e5244"
+    },
+    "nature-writing": {
+      "source": "yuan1z0825/nature-skills",
+      "sourceType": "github",
+      "skillPath": "skills/nature-writing/SKILL.md",
+      "computedHash": "8690c2dc47b84325be897ebfb4972d1bcad7d1a291244ba5c365b88faa10102d"
+    },
+    "scientific-writing": {
+      "source": "davila7/claude-code-templates",
+      "sourceType": "github",
+      "skillPath": "cli-tool/components/skills/scientific/scientific-writing/SKILL.md",
+      "computedHash": "b65b6b7591d5192aef31792d4291dd267d5f5a31fd5a5923e5dc4719c18700a8"
+    }
+  }
+}

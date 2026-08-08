@@ -13,6 +13,9 @@ dist-ssr
 release
 *.local
 
+# Optional: uncomment to skip committing upstream skill copies (~2MB)
+# .agents/
+
 # Env & local auth data
 .env
 .env.*

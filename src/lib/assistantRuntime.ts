@@ -1,4 +1,11 @@
 import agentsMd from "../../AGENTS.md?raw";
+import medprismContract from "../../skills/_medprism-contract.md?raw";
+import scientificWritingSkill from "../../skills/scientific-writing/SKILL.md?raw";
+import academicPaperSkill from "../../skills/academic-paper/SKILL.md?raw";
+import latexPaperEnSkill from "../../skills/latex-paper-en/SKILL.md?raw";
+import natureCitationSkill from "../../skills/nature-citation/SKILL.md?raw";
+import naturePolishingSkill from "../../skills/nature-polishing/SKILL.md?raw";
+import natureWritingSkill from "../../skills/nature-writing/SKILL.md?raw";
 import literatureCiteSkill from "../../skills/literature-cite/SKILL.md?raw";
 import fixCompileSkill from "../../skills/fix-compile-errors/SKILL.md?raw";
 import replyFormats from "../../prompts/reply.formats.md?raw";
@@ -8,6 +15,12 @@ import {
   type LlmConfig,
 } from "./llmClient";
 import { parseAssistantReply } from "./replyParse";
+import {
+  detectSkillIntent,
+  detectWritingDomain,
+  skillIdsForIntent,
+  type SkillIntent,
+} from "./skillRouter";
 import {
   ensureToolsRegistered,
   runTool,
@@ -25,8 +38,8 @@ export type RuntimeRequest = {
   userText: string;
   history: ChatRequestMessage[];
   ctx: ToolContext;
-  /** Force a skill path (e.g. fix-compile / literature-cite) */
-  intent?: "auto" | "cite" | "fix-compile" | "general";
+  /** Force a skill path; `auto` uses detectSkillIntent */
+  intent?: "auto" | SkillIntent | "cite" | "fix-compile" | "general";
 };
 
 export type RuntimeResult = {
@@ -37,30 +50,77 @@ export type RuntimeResult = {
   pdfBase64?: string;
 };
 
-export function detectIntent(text: string): "cite" | "fix-compile" | "general" {
-  const lower = text.toLowerCase();
-  if (
-    /cite|citation|引用|参考文献|bibtex|sepsis-3|pubmed|pmid|doi|literature|paper/.test(
-      lower,
-    )
-  ) {
-    return "cite";
-  }
-  if (
-    /compile|编译|warning|error|fix with ai|诊断|latex\s*log|tectonic/.test(lower)
-  ) {
-    return "fix-compile";
-  }
-  return "general";
+/** @deprecated use detectSkillIntent */
+export function detectIntent(text: string): SkillIntent {
+  return detectSkillIntent(text);
 }
 
-function buildSystemPrompt(mode: AssistantMode, intent: string): string {
-  const skill =
-    intent === "cite"
-      ? literatureCiteSkill
-      : intent === "fix-compile"
-        ? fixCompileSkill
-        : "";
+function resolveIntent(
+  text: string,
+  forced?: RuntimeRequest["intent"],
+): SkillIntent {
+  if (!forced || forced === "auto") return detectSkillIntent(text);
+  if (forced === "general") return "write";
+  return forced;
+}
+
+function projectDomainHint(ctx: ToolContext): string {
+  const main =
+    (ctx.mainFile && ctx.files[ctx.mainFile]) ||
+    ctx.files["main.tex"] ||
+    Object.entries(ctx.files).find(([k]) => k.endsWith(".tex"))?.[1] ||
+    "";
+  return main.slice(0, 2000);
+}
+
+function skillBodies(
+  intent: SkillIntent,
+  userText: string,
+  projectHint: string,
+): string {
+  const ids = skillIdsForIntent(intent, userText, projectHint);
+  const chunks: string[] = [medprismContract];
+
+  for (const id of ids) {
+    switch (id) {
+      case "scientific-writing":
+        chunks.push(scientificWritingSkill);
+        break;
+      case "academic-paper":
+        chunks.push(academicPaperSkill);
+        break;
+      case "latex-paper-en":
+        chunks.push(latexPaperEnSkill);
+        break;
+      case "nature-citation":
+        chunks.push(natureCitationSkill);
+        chunks.push(literatureCiteSkill);
+        break;
+      case "nature-polishing":
+        chunks.push(naturePolishingSkill);
+        break;
+      case "nature-writing":
+        chunks.push(natureWritingSkill);
+        break;
+      case "fix-compile-errors":
+        chunks.push(fixCompileSkill);
+        break;
+      default:
+        break;
+    }
+  }
+
+  return chunks.join("\n\n---\n\n");
+}
+
+function buildSystemPrompt(
+  mode: AssistantMode,
+  intent: SkillIntent,
+  userText: string,
+  projectHint: string,
+): string {
+  const domain = detectWritingDomain(userText, projectHint);
+  const ids = skillIdsForIntent(intent, userText, projectHint);
 
   const toolHint =
     mode === "chat"
@@ -69,14 +129,30 @@ function buildSystemPrompt(mode: AssistantMode, intent: string): string {
         ? "Mode: agent. You may receive paper_search results. Propose file edits only as suggestions (Keep required)."
         : "Mode: tools. You may receive paper_search / compile / parse_compile_log results. Propose file edits as suggestions.";
 
+  const pipelineHint =
+    intent === "cite"
+      ? "Pipeline: nature-citation generates BibTeX/keys from paper_search; latex-paper-en wires .bib + \\cite only (no content rewrite)."
+      : intent === "write" || intent === "nature-writing"
+        ? domain === "general"
+          ? "Pipeline: non-biomedical content → academic-paper owns manuscript content; latex-paper-en is format-only."
+          : "Pipeline: biomedical content → scientific-writing owns manuscript content; latex-paper-en is format-only."
+        : intent === "latex" || intent === "fix-compile"
+          ? "Pipeline: latex-paper-en is format/engineering only — do not rewrite scientific claims."
+          : "";
+
   return [
     agentsMd,
     "",
     toolHint,
     "",
+    `Active skill route: ${intent} / domain=${domain} → ${ids.join(" + ")}`,
+    pipelineHint,
+    "",
     "Output protocol:",
     replyFormats,
-    skill ? `\nActive skill:\n${skill}` : "",
+    "",
+    "Active skills:",
+    skillBodies(intent, userText, projectHint),
   ]
     .filter(Boolean)
     .join("\n");
@@ -179,17 +255,21 @@ async function runCompileFixTools(
 
 function extractSearchQuery(userText: string): string {
   const cleaned = userText
-    .replace(/补充|添加|加入|引用|参考文献|citation|cite|add|please|请/gi, " ")
+    .replace(/补充|添加|加入|引用|参考文献|citation|cite|add|please|请|分段引用|补引用/gi, " ")
     .replace(/\s+/g, " ")
     .trim();
   return cleaned || userText.trim();
 }
 
 export async function runAssistant(req: RuntimeRequest): Promise<RuntimeResult> {
-  const intent =
-    req.intent && req.intent !== "auto" ? req.intent : detectIntent(req.userText);
+  const intent = resolveIntent(req.userText, req.intent);
+  const projectHint = projectDomainHint(req.ctx);
+  const domain = detectWritingDomain(req.userText, projectHint);
   const allowed = new Set(toolsForMode(req.mode));
-  const toolNotes: string[] = [];
+  const toolNotes: string[] = [
+    `skills: ${skillIdsForIntent(intent, req.userText, projectHint).join(", ")}`,
+    `domain: ${domain}`,
+  ];
   let lastCompileLog = req.ctx.lastCompileLog;
   let pdfBase64: string | undefined;
   const toolBlocks: string[] = [];
@@ -200,41 +280,45 @@ export async function runAssistant(req: RuntimeRequest): Promise<RuntimeResult> 
     toolBlocks.push(toolBlock);
   }
 
-  if (intent === "fix-compile" && (allowed.has("compile") || allowed.has("parse_compile_log"))) {
+  if (
+    intent === "fix-compile" &&
+    (allowed.has("compile") || allowed.has("parse_compile_log"))
+  ) {
     if (req.mode === "tools" || allowed.has("parse_compile_log")) {
-      // agent: parse only if log exists; tools: may compile
       const ctx = { ...req.ctx };
       if (req.mode === "agent" && !ctx.lastCompileLog) {
         toolBlocks.push(
           "No compile log in context. Ask user to Compile first, or switch to tools mode.",
         );
         toolNotes.push("fix-compile: skipped (no log in agent mode)");
-      } else {
-        if (req.mode === "agent") {
-          const parsed = await runTool(
-            "parse_compile_log",
-            { log: ctx.lastCompileLog },
-            ctx,
+      } else if (req.mode === "agent") {
+        const parsed = await runTool(
+          "parse_compile_log",
+          { log: ctx.lastCompileLog },
+          ctx,
+        );
+        if (parsed.ok) {
+          toolNotes.push("parse_compile_log: ok");
+          toolBlocks.push(
+            `TOOL parse_compile_log:\n${JSON.stringify(parsed.data, null, 2)}`,
           );
-          if (parsed.ok) {
-            toolNotes.push("parse_compile_log: ok");
-            toolBlocks.push(`TOOL parse_compile_log:\n${JSON.stringify(parsed.data, null, 2)}`);
-          }
-        } else {
-          const fix = await runCompileFixTools(ctx);
-          toolNotes.push(...fix.notes);
-          toolBlocks.push(fix.toolBlock);
-          lastCompileLog = fix.lastCompileLog ?? lastCompileLog;
-          pdfBase64 = fix.pdfBase64;
         }
+      } else {
+        const fix = await runCompileFixTools(ctx);
+        toolNotes.push(...fix.notes);
+        toolBlocks.push(fix.toolBlock);
+        lastCompileLog = fix.lastCompileLog ?? lastCompileLog;
+        pdfBase64 = fix.pdfBase64;
       }
     }
   }
 
-  // In tools mode, also allow opportunistic paper_search if user clearly cites mid-general
-  // (already handled via intent).
-
-  const system = buildSystemPrompt(req.mode, intent);
+  const system = buildSystemPrompt(
+    req.mode,
+    intent,
+    req.userText,
+    projectHint,
+  );
   const messages: ChatRequestMessage[] = [
     { role: "system", content: system },
     {

@@ -1,8 +1,8 @@
 ---
 name: section-revise
-description: Revise medical manuscript sections for clarity and non-causal wording. Use for polish, rewrite, or strengthen Results/Discussion language.
+description: Deprecated alias — MedPrism routes polish/revise to nature-polishing.
 ---
 
-# Section revise
+# Deprecated
 
-Plan6 placeholder.
+本节润色已合并到 `nature-polishing`。若仍看到本文件，说明路由未更新。

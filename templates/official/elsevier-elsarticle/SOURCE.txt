@@ -1,0 +1,3 @@
+﻿Source: CTAN elsarticle
+https://ctan.org/pkg/elsarticle
+LPPL. Vendored for MedPrism.

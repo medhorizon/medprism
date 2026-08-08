@@ -1,0 +1,91 @@
+{
+  "name": "medprism",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Medical scientific writing workspace",
+  "author": "MedHorizon",
+  "type": "module",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "lint": "oxlint",
+    "preview": "vite preview",
+    "auth:server": "node server/auth/index.mjs",
+    "compile:server": "node server/compile/index.mjs",
+    "electron:dev": "electron .",
+    "electron:pack": "npm run build && electron-builder --publish never",
+    "electron:pack:win": "npm run build && electron-builder --win --x64 --publish never",
+    "electron:pack:linux": "npm run build && electron-builder --linux --x64 --publish never",
+    "electron:pack:mac": "npm run build && electron-builder --mac --arm64 --publish never"
+  },
+  "dependencies": {
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "react-router-dom": "^7.18.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.13.3",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.4",
+    "electron": "^37.2.6",
+    "electron-builder": "^26.0.12",
+    "oxlint": "^1.75.0",
+    "typescript": "~6.0.2",
+    "vite": "^8.2.0"
+  },
+  "build": {
+    "appId": "icu.medhorizon.medprism",
+    "productName": "MedPrism",
+    "copyright": "Copyright © MedHorizon",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "asar": true,
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "MedPrism-${version}-win64-portable.${ext}"
+    },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "category": "Office",
+      "artifactName": "MedPrism-${version}-linux64.${ext}"
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "category": "public.app-category.productivity",
+      "artifactName": "MedPrism-${version}-macos-arm64.${ext}",
+      "identity": null
+    },
+    "dmg": {
+      "artifactName": "MedPrism-${version}-macos-arm64.${ext}"
+    }
+  }
+}

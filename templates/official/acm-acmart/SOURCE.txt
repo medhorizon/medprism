@@ -1,0 +1,3 @@
+﻿Source: CTAN acmart
+https://ctan.org/pkg/acmart
+Vendored for MedPrism. See package LICENSE.

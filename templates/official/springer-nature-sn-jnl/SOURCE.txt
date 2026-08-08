@@ -1,0 +1,3 @@
+﻿Source: Springer Nature journal article template (content 18782940 v12)
+Official: https://www.springernature.com/gp/authors/campaigns/latex-author-support
+Vendored for MedPrism. Follow publisher redistribution terms.

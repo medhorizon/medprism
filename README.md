@@ -25,7 +25,7 @@ npm run compile:server        # local Tectonic
 npm run electron:dev
 ```
 
-Auth: [docs/auth-setup.md](./docs/auth-setup.md) · Compile: [docs/compile-setup.md](./docs/compile-setup.md) · Real-auth plan: [PLAN01-REAL-AUTH.md](./PLAN01-REAL-AUTH.md).
+Auth: [docs/auth-setup.md](./docs/auth-setup.md) · Compile: [docs/compile-setup.md](./docs/compile-setup.md) · Real-auth plan: [PLAN01-REAL-AUTH.md](./PLAN01-REAL-AUTH.md) · V1 optimization plans: [docs/plans/](./docs/plans/README.md).
 
 Routes:
 
@@ -38,6 +38,7 @@ Routes:
 ```text
 AGENTS.md                 # agent protocol (Plan4)
 PLAN.md / PLAN01-REAL-AUTH.md / PLAN08.md
+docs/plans/               # V1 executable optimization plans (MASTER + P01–P10)
 templates/README.md       # template library docs
 prompts/                  # system / reply formats
 skills/                   # SKILL.md packages (Plan6/8)

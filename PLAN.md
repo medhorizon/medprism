@@ -17,6 +17,13 @@ Plan5 (UI 修复) → Plan1 (登录页) → Plan2 (项目列表)
 详见 [PLAN08.md](./PLAN08.md)。  
 **Plan01 完成状态**见 [PLAN01.md](./PLAN01.md)；详规见 [PLAN01-REAL-AUTH.md](./PLAN01-REAL-AUTH.md)。
 
+### V1 优化可执行计划（当前主线）
+
+历史 Plan1–8 完成后的下一阶段实现计划在 **[`docs/plans/`](./docs/plans/README.md)**：
+
+- 总控：[`docs/plans/MASTER_PLAN.md`](./docs/plans/MASTER_PLAN.md)
+- P01–P10 + V2 backlog：各子目录 `plan.md`
+
 理由：先稳住壳层与路由，再接鉴权与数据，再接模型协议；**真编译依赖本地/服务端 TeX 环境与 Preview 接线，放在 Agent 流程之后作为独立里程碑。**
 
 ---
@@ -298,5 +305,6 @@ skills-lock.json
 ## 下一步（需你拍板）
 
 1. **Plan01**：✅ 已完成（见 [PLAN01.md](./PLAN01.md)）  
-2. **Streaming / 代理不下发用户 key**：可选加固  
-3. **Plan7 编译**：✅ 已选本机 Tectonic；**暂未开工**（排在 M5）
+2. **V1 优化主线**：按 [`docs/plans/MASTER_PLAN.md`](./docs/plans/MASTER_PLAN.md) 执行（建议先 P01 Patch + P02 Context + P03 Electron Compile）  
+3. **Streaming / 代理不下发用户 key**：见 plans 中 P08 / backlog  
+4. **Plan7 / 打包编译**：与 P03、P06、P09 对齐

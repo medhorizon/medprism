@@ -1,85 +1,123 @@
-import type { ChatMessage } from "../types/chat";
+import { applyPatchSet, previewPatchSet, undoPatchSet } from "./patch/apply";
+import { sha256Hex } from "./patch/hash";
+import { validatePatchSet } from "./patch/validate";
+import type { ChatMessage, ChatSuggestion } from "../types/chat";
 
-export function resolveSuggestionTarget(
-  suggestion: { title?: string; path?: string; body?: string },
+/**
+ * Enrich a parsed suggestion against current files: validate PatchSet,
+ * attach previews, or mark legacy display-only (no Keep).
+ */
+export async function enrichSuggestion(
+  suggestion: ChatSuggestion,
   files: Record<string, string>,
-): string | undefined {
-  const keys = Object.keys(files);
-  if (!keys.length) return undefined;
-
-  const pick = (re: RegExp) =>
-    keys.find((k) => re.test(k.replace(/\\/g, "/")));
-
-  const explicit = suggestion.path?.replace(/\\/g, "/").replace(/^\.\//, "");
-  if (explicit) {
-    if (explicit in files) return explicit;
-    const base = explicit.split("/").pop();
-    if (base) {
-      const byBase = keys.find((k) => k.replace(/\\/g, "/").endsWith("/" + base) || k === base);
-      if (byBase) return byBase;
-    }
+): Promise<ChatSuggestion> {
+  if (!suggestion.patchSet) {
+    return {
+      ...suggestion,
+      legacyDisplayOnly: true,
+      patchError: {
+        code: "INVALID_PATCH",
+        message:
+          "Legacy suggestion (no PatchSet). Display only — regenerate with replace_text / insert / bib_add.",
+      },
+      previews: undefined,
+    };
   }
 
-  const title = suggestion.title || "";
-  if (/\.bib/i.test(title) || /bibtex|bibliograph/i.test(title)) {
-    return pick(/\.bib$/i) ?? keys.find((k) => k.endsWith(".bib"));
+  const validated = await validatePatchSet(suggestion.patchSet, files);
+  if (!validated.ok) {
+    return {
+      ...suggestion,
+      legacyDisplayOnly: false,
+      patchError: validated.error,
+      previews: previewPatchSet(suggestion.patchSet, files),
+    };
   }
-  if (/methods/i.test(title)) return pick(/methods\.tex$/i) ?? pick(/methods/i);
-  if (/results/i.test(title)) return pick(/results\.tex$/i) ?? pick(/results/i);
-  if (/abstract/i.test(title)) return pick(/abstract\.tex$/i) ?? pick(/abstract/i);
-  if (/main\.tex/i.test(title)) return pick(/(^|\/)main\.tex$/i);
-
-  // BibTeX body heuristic
-  const body = suggestion.body || "";
-  if (/^\s*@\w+\{/m.test(body)) {
-    return pick(/\.bib$/i) ?? keys.find((k) => k.endsWith(".bib"));
-  }
-
-  return pick(/(^|\/)main\.tex$/i) ?? keys.find((k) => k.endsWith(".tex")) ?? keys[0];
-}
-
-function mergeSuggestionBody(previous: string, body: string, target: string): string {
-  const trimmedBody = body.trim();
-  if (target.endsWith(".bib")) {
-    // Append BibTeX entries; avoid duplicating identical blocks
-    if (previous.includes(trimmedBody)) return previous;
-    return `${previous.trimEnd()}\n\n${trimmedBody}\n`;
-  }
-  return `${previous.trimEnd()}\n\n% --- MedPrism suggestion applied ---\n${trimmedBody}\n`;
-}
-
-export function applySuggestionToFiles(
-  files: Record<string, string>,
-  message: ChatMessage,
-): {
-  files: Record<string, string>;
-  target: string;
-  previousContent: string;
-} | null {
-  if (!message.suggestion) return null;
-  if (message.suggestion.status === "applied") return null;
-
-  const target = resolveSuggestionTarget(message.suggestion, files);
-  if (!target) return null;
-
-  // Create .bib if suggestion targets a missing bib path
-  const pathHint = message.suggestion.path?.replace(/\\/g, "/");
-  let nextFiles = { ...files };
-  let resolved = target;
-  if (!(resolved in nextFiles) && pathHint?.endsWith(".bib")) {
-    nextFiles = { ...nextFiles, [pathHint]: "" };
-    resolved = pathHint;
-  }
-  if (!(resolved in nextFiles)) return null;
-
-  const previousContent = nextFiles[resolved] ?? "";
-  const nextContent = mergeSuggestionBody(previousContent, message.suggestion.body, resolved);
 
   return {
-    target: resolved,
-    previousContent,
-    files: { ...nextFiles, [resolved]: nextContent },
+    ...suggestion,
+    legacyDisplayOnly: false,
+    patchError: undefined,
+    title: suggestion.title || suggestion.patchSet.summary,
+    path: suggestion.path || suggestion.patchSet.operations[0]?.path,
+    body: suggestion.body || suggestion.patchSet.summary,
+    previews: previewPatchSet(suggestion.patchSet, files),
   };
+}
+
+export async function applySuggestionToFiles(
+  files: Record<string, string>,
+  message: ChatMessage,
+): Promise<{
+  files: Record<string, string>;
+  target: string;
+  previousFiles: Record<string, string>;
+  postApplyHashes: Record<string, string>;
+  previews: NonNullable<ChatSuggestion["previews"]>;
+} | null> {
+  const suggestion = message.suggestion;
+  if (!suggestion) return null;
+  if (suggestion.status === "applied") return null;
+  if (!suggestion.patchSet || suggestion.legacyDisplayOnly || suggestion.patchError) {
+    return null;
+  }
+
+  // Re-validate at Keep time (file may have changed since message was shown)
+  const result = await applyPatchSet(suggestion.patchSet, files);
+  if (!result.ok) return null;
+
+  const postApplyHashes: Record<string, string> = {};
+  for (const path of result.affectedPaths) {
+    postApplyHashes[path] = await sha256Hex(result.files[path] ?? "");
+  }
+
+  return {
+    files: result.files,
+    target: result.affectedPaths[0]!,
+    previousFiles: result.previousFiles,
+    postApplyHashes,
+    previews: result.previews,
+  };
+}
+
+export async function undoSuggestionInFiles(
+  files: Record<string, string>,
+  suggestion: ChatSuggestion,
+): Promise<
+  | { ok: true; files: Record<string, string> }
+  | { ok: false; reason: string }
+> {
+  if (
+    suggestion.status !== "applied" ||
+    !suggestion.previousFiles ||
+    !suggestion.postApplyHashes
+  ) {
+    // Legacy single-file undo (pre-patch messages)
+    if (
+      suggestion.status === "applied" &&
+      suggestion.appliedTo &&
+      suggestion.previousContent != null
+    ) {
+      return {
+        ok: true,
+        files: {
+          ...files,
+          [suggestion.appliedTo]: suggestion.previousContent,
+        },
+      };
+    }
+    return { ok: false, reason: "Nothing to undo" };
+  }
+
+  const result = await undoPatchSet({
+    files,
+    previousFiles: suggestion.previousFiles,
+    postApplyHashes: suggestion.postApplyHashes,
+  });
+  if (!result.ok) {
+    return { ok: false, reason: result.error.message };
+  }
+  return { ok: true, files: result.files };
 }
 
 export function withSuggestionStatus(
@@ -94,4 +132,16 @@ export function withSuggestionStatus(
       suggestion: { ...m.suggestion, ...patch },
     };
   });
+}
+
+/** @deprecated basename guessing — kept only for tests of legacy helpers if any */
+export function resolveSuggestionTarget(
+  suggestion: { title?: string; path?: string; body?: string },
+  files: Record<string, string>,
+): string | undefined {
+  const keys = Object.keys(files);
+  if (!keys.length) return undefined;
+  const explicit = suggestion.path?.replace(/\\/g, "/").replace(/^\.\//, "");
+  if (explicit && explicit in files) return explicit;
+  return undefined;
 }

@@ -12,6 +12,7 @@ import { compileProject } from "../lib/compileClient";
 import { isUsableLlmConfig, LlmClientError, type ChatRequestMessage } from "../lib/llmClient";
 import {
   applySuggestionToFiles,
+  undoSuggestionInFiles,
   withSuggestionStatus,
 } from "../lib/suggestions";
 import { useI18n } from "../i18n/context";
@@ -342,9 +343,28 @@ export function WorkspacePage() {
 
   async function keepSuggestion(message: ChatMessage) {
     if (!project || !message.suggestion || message.suggestion.status === "applied") return;
+    if (
+      message.suggestion.legacyDisplayOnly ||
+      message.suggestion.patchError ||
+      !message.suggestion.patchSet
+    ) {
+      flash(t("assistant.patchNeedRegen"));
+      return;
+    }
 
-    const result = applySuggestionToFiles(project.files, message);
-    if (!result) return;
+    const result = await applySuggestionToFiles(project.files, message);
+    if (!result) {
+      flash(t("assistant.patchStale"));
+      setChat((msgs) =>
+        withSuggestionStatus(msgs, message.id, {
+          patchError: {
+            code: "BASE_MISMATCH",
+            message: "Patch is stale or invalid — regenerate",
+          },
+        }),
+      );
+      return;
+    }
 
     setActiveFile(result.target);
     const nextProject = { ...project, files: result.files };
@@ -353,14 +373,18 @@ export function WorkspacePage() {
       withSuggestionStatus(msgs, message.id, {
         status: "applied",
         appliedTo: result.target,
-        previousContent: result.previousContent,
+        previousFiles: result.previousFiles,
+        postApplyHashes: result.postApplyHashes,
+        previews: result.previews,
+        previousContent: undefined,
         path: message.suggestion?.path,
+        patchError: undefined,
       }),
     );
     setCompiled(false);
     flash(t("workspace.toastKept"));
 
-    // Tools mode: auto recompile after compile-fix Keep (max 2)
+    // Auto recompile after compile-fix Keep (max 2)
     const looksLikeFix =
       /\.tex/i.test(result.target) &&
       (compileFailed || /compile|error|fix|警告|编译/i.test(message.content + message.suggestion.title));
@@ -395,26 +419,27 @@ export function WorkspacePage() {
     }
   }
 
-  function undoSuggestion(message: ChatMessage) {
+  async function undoSuggestion(message: ChatMessage) {
     if (!project) return;
     const suggestion = message.suggestion;
     if (!suggestion) return;
 
-    if (
-      suggestion.status === "applied" &&
-      suggestion.appliedTo &&
-      suggestion.previousContent != null
-    ) {
-      const target = suggestion.appliedTo;
-      setActiveFile(target);
-      persist({
-        ...project,
-        files: { ...project.files, [target]: suggestion.previousContent },
-      });
+    if (suggestion.status === "applied") {
+      const result = await undoSuggestionInFiles(project.files, suggestion);
+      if (!result.ok) {
+        flash(t("assistant.undoConflict"));
+        return;
+      }
+      const target =
+        suggestion.appliedTo || Object.keys(suggestion.previousFiles ?? {})[0];
+      if (target) setActiveFile(target);
+      persist({ ...project, files: result.files });
       setChat((msgs) =>
         withSuggestionStatus(msgs, message.id, {
           status: "undone",
           previousContent: undefined,
+          previousFiles: undefined,
+          postApplyHashes: undefined,
           appliedTo: undefined,
         }),
       );
@@ -423,12 +448,10 @@ export function WorkspacePage() {
       return;
     }
 
-    if (suggestion.status !== "applied") {
-      setChat((msgs) =>
-        withSuggestionStatus(msgs, message.id, { status: "dismissed" }),
-      );
-      flash(t("workspace.toastDismissed"));
-    }
+    setChat((msgs) =>
+      withSuggestionStatus(msgs, message.id, { status: "dismissed" }),
+    );
+    flash(t("workspace.toastDismissed"));
   }
 
   function fixWithAi() {

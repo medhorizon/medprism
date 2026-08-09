@@ -111,7 +111,11 @@ export function AssistantCard({
               const status = message.suggestion?.status ?? "pending";
               const kept = status === "applied";
               const dismissed = status === "dismissed";
-              const canKeep = status === "pending" || status === "undone";
+              const sug = message.suggestion;
+              const patchOk =
+                !!sug?.patchSet && !sug.patchError && !sug.legacyDisplayOnly;
+              const canKeep =
+                (status === "pending" || status === "undone") && patchOk;
               const canUndo = status === "applied" || status === "pending";
 
               return (
@@ -120,10 +124,35 @@ export function AssistantCard({
                     {message.role === "assistant" ? "MedPrism" : t("assistant.you")}
                   </div>
                   <div className="msg-bubble">{message.content}</div>
-                  {message.suggestion && !dismissed && (
+                  {sug && !dismissed && (
                     <div className={`suggestion ${kept ? "is-kept" : ""}`}>
-                      <div className="suggestion-head">{message.suggestion.title}</div>
-                      <div className="suggestion-body">{message.suggestion.body}</div>
+                      <div className="suggestion-head">{sug.title}</div>
+
+                      {sug.patchError && (
+                        <div className="suggestion-error" role="alert">
+                          {t("assistant.patchNeedRegen")}: {sug.patchError.message}
+                        </div>
+                      )}
+
+                      {sug.previews && sug.previews.length > 0 ? (
+                        <div className="suggestion-diffs">
+                          {sug.previews.map((p, i) => (
+                            <div key={`${p.path}-${p.op}-${i}`} className="suggestion-diff">
+                              <div className="suggestion-diff-meta">
+                                <span className="suggestion-diff-op">{p.op}</span>
+                                <span className="suggestion-diff-path">{p.path}</span>
+                              </div>
+                              <div className="suggestion-diff-label">before</div>
+                              <pre className="suggestion-diff-block is-before">{p.before}</pre>
+                              <div className="suggestion-diff-label">after</div>
+                              <pre className="suggestion-diff-block is-after">{p.after}</pre>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="suggestion-body">{sug.body}</div>
+                      )}
+
                       <div className="suggestion-actions">
                         <button
                           className="btn btn-primary"

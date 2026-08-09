@@ -736,6 +736,71 @@
   background: #fbfbfb;
 }
 
+.suggestion-error {
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #8a1f1f;
+  background: #fff5f5;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.suggestion-diffs {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px 12px;
+  background: #fbfbfb;
+}
+
+.suggestion-diff-meta {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  margin-bottom: 4px;
+  font-size: 11px;
+}
+
+.suggestion-diff-op {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  color: var(--ink-secondary);
+}
+
+.suggestion-diff-path {
+  color: var(--ink-tertiary);
+}
+
+.suggestion-diff-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-tertiary);
+  margin: 4px 0 2px;
+}
+
+.suggestion-diff-block {
+  margin: 0;
+  padding: 8px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow: auto;
+  max-height: 140px;
+}
+
+.suggestion-diff-block.is-before {
+  background: #fff4f4;
+  border: 1px solid rgba(180, 60, 60, 0.18);
+}
+
+.suggestion-diff-block.is-after {
+  background: #f3fff5;
+  border: 1px solid rgba(40, 140, 70, 0.18);
+}
+
 .suggestion-actions {
   display: flex;
   gap: 6px;

@@ -137,6 +137,9 @@ export const en: Messages = {
   "assistant.keep": "Keep",
   "assistant.kept": "Kept",
   "assistant.undo": "Undo",
+  "assistant.patchNeedRegen": "Regenerate patch required",
+  "assistant.patchStale": "File changed — patch is stale; regenerate",
+  "assistant.undoConflict": "File edited after Keep — cannot safely undo",
   "assistant.placeholder": "Ask anything…",
   "assistant.send": "Send",
   "assistant.initial":

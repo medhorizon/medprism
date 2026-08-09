@@ -128,6 +128,9 @@ export const zh: Messages = {
   "assistant.keep": "保留",
   "assistant.kept": "已保留",
   "assistant.undo": "撤销",
+  "assistant.patchNeedRegen": "需要重新生成补丁",
+  "assistant.patchStale": "文件已变更，补丁失效，请重新生成",
+  "assistant.undoConflict": "保留后文件又被编辑，无法安全撤销",
   "assistant.placeholder": "随便问…",
   "assistant.send": "发送",
   "assistant.initial":

@@ -15,6 +15,7 @@ import {
   type ChatRequestMessage,
   type LlmConfig,
 } from "./llmClient";
+import { sha256Hex } from "./patch/hash";
 import { parseAssistantReply } from "./replyParse";
 import {
   detectSkillIntent,
@@ -22,6 +23,7 @@ import {
   skillIdsForIntent,
   type SkillIntent,
 } from "./skillRouter";
+import { enrichSuggestion } from "./suggestions";
 import {
   ensureToolsRegistered,
   runTool,
@@ -129,7 +131,7 @@ function buildSystemPrompt(
   const toolHint =
     mode === "review"
       ? "Mode: review (peer review). Produce a structured referee report + revision roadmap from the manuscript context. Do not bulk-rewrite unless the user explicitly asks to apply a fix."
-      : "Mode: assistant (natural language). Skills and tools are selected automatically from the user request. Propose file edits only as suggestions (Keep required).";
+      : "Mode: assistant (natural language). Skills and tools are selected automatically from the user request. Propose file edits only as PatchSet (Keep required). Never append to .tex EOF.";
 
   const pipelineHint =
     intent === "review"
@@ -162,8 +164,12 @@ function buildSystemPrompt(
     .join("\n");
 }
 
-function projectContext(ctx: ToolContext): string {
+async function projectContext(ctx: ToolContext): Promise<string> {
   const names = Object.keys(ctx.files).slice(0, 40).join(", ");
+  const hashLines: string[] = [];
+  for (const [path, content] of Object.entries(ctx.files).slice(0, 40)) {
+    hashLines.push(`- ${path}: ${await sha256Hex(content)}`);
+  }
   const bib =
     Object.entries(ctx.files).find(([k]) => k.endsWith(".bib"))?.[1]?.slice(0, 1500) ??
     "(no .bib)";
@@ -174,6 +180,7 @@ function projectContext(ctx: ToolContext): string {
     "";
   return [
     `Project files: ${names}`,
+    `File content hashes (copy into PatchSet baseSha256):\n${hashLines.join("\n")}`,
     `Main excerpt:\n${main.slice(0, 2500)}`,
     `Bibliography excerpt:\n${bib}`,
     ctx.lastCompileLog
@@ -252,7 +259,7 @@ async function runCompileFixTools(
 
   return {
     notes: [...notes, "parse_compile_log: ok"],
-    toolBlock: `TOOL parse_compile_log:\n${JSON.stringify(parsed.data, null, 2)}\n\nPropose a MINIMAL suggestion patch for the broken file.`,
+    toolBlock: `TOOL parse_compile_log:\n${JSON.stringify(parsed.data, null, 2)}\n\nPropose a MINIMAL PatchSet using replace_text (unique oldText) for the broken file. Do not append at EOF.`,
     lastCompileLog: log,
   };
 }
@@ -306,7 +313,7 @@ export async function runAssistant(req: RuntimeRequest): Promise<RuntimeResult> 
     { role: "system", content: system },
     {
       role: "user",
-      content: `Workspace context:\n${projectContext(req.ctx)}`,
+      content: `Workspace context:\n${await projectContext(req.ctx)}`,
     },
     ...req.history.slice(-10),
   ];
@@ -323,14 +330,19 @@ export async function runAssistant(req: RuntimeRequest): Promise<RuntimeResult> 
   const raw = await chatCompletions({ config: req.config, messages });
   const parsed = parseAssistantReply(raw);
 
-  const suggestions = parsed.suggestions.map((s) => ({
-    ...s,
-    path: s.path,
-    title:
-      s.path && s.title && s.title !== s.path
-        ? `${s.path} · ${s.title}`
-        : s.title || s.path || "suggestion",
-  }));
+  const suggestions = await Promise.all(
+    parsed.suggestions.map(async (s) => {
+      const enriched = await enrichSuggestion(s, req.ctx.files);
+      return {
+        ...enriched,
+        path: enriched.path,
+        title:
+          enriched.path && enriched.title && enriched.title !== enriched.path
+            ? `${enriched.path} · ${enriched.title}`
+            : enriched.title || enriched.path || "suggestion",
+      };
+    }),
+  );
 
   return {
     content: parsed.content || raw,

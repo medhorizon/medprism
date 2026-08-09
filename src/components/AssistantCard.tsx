@@ -1,6 +1,5 @@
 import { useRef, type PointerEvent } from "react";
 import { useI18n } from "../i18n/context";
-import type { AssistantMode } from "../tools/types";
 import type { ChatMessage } from "../types/chat";
 
 type AssistantCardProps = {
@@ -14,8 +13,6 @@ type AssistantCardProps = {
   quickPrompts: string[];
   onKeep: (message: ChatMessage) => void;
   onUndo: (message: ChatMessage) => void;
-  mode: AssistantMode;
-  onModeChange: (mode: AssistantMode) => void;
   sending?: boolean;
 };
 
@@ -33,8 +30,6 @@ function IconSend() {
   );
 }
 
-const MODES: AssistantMode[] = ["chat", "agent", "tools"];
-
 export function AssistantCard({
   height,
   onHeightChange,
@@ -46,8 +41,6 @@ export function AssistantCard({
   quickPrompts,
   onKeep,
   onUndo,
-  mode,
-  onModeChange,
   sending,
 }: AssistantCardProps) {
   const { t } = useI18n();
@@ -92,25 +85,6 @@ export function AssistantCard({
 
         <div className="ai-card-bar">
           <span className="ai-card-title">{t("assistant.title")}</span>
-          <div className="mode-switch" role="group" aria-label={t("assistant.mode")}>
-            {MODES.map((m) => (
-              <button
-                key={m}
-                type="button"
-                className={`mode-chip ${mode === m ? "active" : ""}`}
-                aria-pressed={mode === m}
-                onClick={() => onModeChange(m)}
-              >
-                {t(
-                  m === "chat"
-                    ? "assistant.mode.chat"
-                    : m === "agent"
-                      ? "assistant.mode.agent"
-                      : "assistant.mode.tools",
-                )}
-              </button>
-            ))}
-          </div>
           <div className="panel-head-actions">
             <button
               className="icon-btn"

@@ -26,7 +26,6 @@ import {
   type Project,
 } from "../state/projects";
 import { filesToFileList } from "../templates";
-import type { AssistantMode } from "../tools/types";
 import type { ChatMessage } from "../types/chat";
 
 const FILES_MIN = 160;
@@ -65,8 +64,6 @@ export function WorkspacePage() {
   const [providerOpen, setProviderOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const [auth, setAuth] = useState(() => loadAuth());
-  const [assistantMode, setAssistantMode] = useState<AssistantMode>("agent");
-
   useEffect(() => {
     setAuth(loadAuth());
   }, [projectId]);
@@ -78,15 +75,23 @@ export function WorkspacePage() {
   const demo = isDemoProject(project);
 
   const quickPrompts = useMemo(() => {
+    const reviewChip = t("assistant.qReview");
     if (demo) {
       return [
         t("assistant.demo.q1"),
         t("assistant.demo.q2"),
         t("assistant.demo.q3"),
         t("assistant.demo.q4"),
+        reviewChip,
       ];
     }
-    return [t("assistant.q1"), t("assistant.q2"), t("assistant.q3"), t("assistant.q4")];
+    return [
+      t("assistant.q1"),
+      t("assistant.q2"),
+      t("assistant.q3"),
+      t("assistant.q4"),
+      reviewChip,
+    ];
   }, [demo, t]);
 
   useEffect(() => {
@@ -267,11 +272,18 @@ export function WorkspacePage() {
       }));
 
     try {
+      const reviewChip = t("assistant.qReview");
+      const forceReview =
+        prompt.trim() === reviewChip ||
+        prompt.trim() === t("assistant.review.q1");
+
       const result = await runAssistant({
-        mode: assistantMode,
+        mode: "assistant",
         config,
-        userText: prompt,
+        userText: forceReview ? t("assistant.review.q1") : prompt,
         history,
+        // 快捷芯片「审阅论文」或自然语言审稿意图 → review skill
+        intent: forceReview ? "review" : "auto",
         ctx: {
           projectId: project.id,
           files: project.files,
@@ -353,7 +365,7 @@ export function WorkspacePage() {
       /\.tex/i.test(result.target) &&
       (compileFailed || /compile|error|fix|警告|编译/i.test(message.content + message.suggestion.title));
 
-    if (assistantMode === "tools" && looksLikeFix && fixRetriesRef.current < MAX_FIX_RECOMPILES) {
+    if (looksLikeFix && fixRetriesRef.current < MAX_FIX_RECOMPILES) {
       fixRetriesRef.current += 1;
       flash(t("workspace.toastRecompiling"));
       setCompiling(true);
@@ -421,7 +433,6 @@ export function WorkspacePage() {
 
   function fixWithAi() {
     setAiOpen(true);
-    setAssistantMode((m) => (m === "chat" ? "tools" : m));
     void send(demo ? t("assistant.demo.q4") : t("assistant.q4"));
   }
 
@@ -511,8 +522,6 @@ export function WorkspacePage() {
                 quickPrompts={quickPrompts}
                 onKeep={(m) => void keepSuggestion(m)}
                 onUndo={undoSuggestion}
-                mode={assistantMode}
-                onModeChange={setAssistantMode}
                 sending={sending}
               />
             )}

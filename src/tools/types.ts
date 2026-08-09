@@ -19,7 +19,8 @@ export type ToolDef = {
   execute: (args: Record<string, unknown>, ctx: ToolContext) => Promise<ToolResult>;
 };
 
-export type AssistantMode = "chat" | "agent" | "tools";
+/** UI tabs: unified NL assistant vs peer-review. */
+export type AssistantMode = "assistant" | "review";
 
 export type PaperHit = {
   id: string;

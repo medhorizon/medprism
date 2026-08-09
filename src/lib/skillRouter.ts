@@ -4,10 +4,12 @@
  * - academic-paper → 非生物医学成文（入口）
  * - nature-citation → 只生成 citation
  * - latex-paper-en → 只改格式 / 把 citation 接入 LaTeX（不改科学内容）
+ * - academic-paper-reviewer → 审稿 / 同行评议报告
  */
 
 export type SkillIntent =
   | "fix-compile"
+  | "review"
   | "cite"
   | "polish"
   | "latex"
@@ -55,6 +57,17 @@ export function detectSkillIntent(text: string): SkillIntent {
     )
   ) {
     return "nature-writing";
+  }
+
+  // Peer review / critique (before cite: "review citations" still can hit cite if stronger)
+  if (
+    /peer\s*review|referee|manuscript review|editorial (decision|review)|审阅论文|审阅|审稿|评审意见|同行评议|挑毛病|批判性审|模拟审稿|review (this |my )?(paper|manuscript)|critique (this |my )?(paper|manuscript)|帮我审|审查这篇/.test(
+      lower,
+    ) ||
+    (/^review\b|\breview\b/.test(lower) &&
+      /paper|manuscript|稿|论文|article/.test(lower))
+  ) {
+    return "review";
   }
 
   if (
@@ -128,6 +141,8 @@ export function skillIdsForIntent(
   switch (intent) {
     case "fix-compile":
       return ["fix-compile-errors", "latex-paper-en"];
+    case "review":
+      return ["academic-paper-reviewer"];
     case "cite":
       return ["nature-citation", "latex-paper-en"];
     case "polish":

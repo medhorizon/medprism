@@ -7,6 +7,12 @@
       "skillPath": "academic-paper/SKILL.md",
       "computedHash": "5e11238876b53c4edf2789b7d2bdf02c3cae2ed369503bb5fb1cedcaabe008db"
     },
+    "academic-paper-reviewer": {
+      "source": "imbad0202/academic-research-skills",
+      "sourceType": "github",
+      "skillPath": "academic-paper-reviewer/SKILL.md",
+      "computedHash": "418be5c430d50366bca2513c3c221ee2cf8af7cf0c8f08a7ba1a7212a0f0d65b"
+    },
     "latex-paper-en": {
       "source": "bahayonghang/academic-writing-skills",
       "sourceType": "github",

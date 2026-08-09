@@ -328,9 +328,10 @@
   background: transparent;
   color: var(--ink-tertiary);
   font-size: 11px;
-  padding: 3px 8px;
+  padding: 3px 6px;
   border-radius: 6px;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .mode-chip.active {

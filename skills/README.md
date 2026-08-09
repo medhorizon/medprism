@@ -10,17 +10,21 @@
 | **`academic-paper`** | **非生物医学成文**（替代上一行） |
 | **`nature-citation`** | **只生成 citation**（BibTeX/keys，经 `paper_search`） |
 | **`latex-paper-en`** | **只改格式**；并把 citation **接入** `.bib` / `\cite` |
+| **`academic-paper-reviewer`** | **审稿**：同行评议报告 + 修订路线图 |
 
 成文 domain：`detectWritingDomain`（看用户话 + 主 tex 摘要）。  
 强制入口：说「非医学 / 非生物医学 / 通用学术」→ `academic-paper`。
 
-引用链路：`cite` = `nature-citation` → `latex-paper-en`。
+引用链路：`cite` = `nature-citation` → `latex-paper-en`。  
+UI：统一助手（自然语言自动路由）+ 快捷芯片 **「审阅论文」**（强制 `academic-paper-reviewer`）。  
+也可直接说「审稿 / peer review / 审阅论文」触发。
 
 ## 路由（`src/lib/skillRouter.ts`）
 
 | 意图 | Skills | 工具 |
 |---|---|---|
 | **write** | biomedical → `scientific-writing`；general → `academic-paper` | — |
+| **review** | `academic-paper-reviewer` | — |
 | **cite** | `nature-citation` + `latex-paper-en` | `paper_search` |
 | **latex** | `latex-paper-en` | — |
 | **polish** | `nature-polishing` | — |

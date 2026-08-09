@@ -31,7 +31,7 @@ Routes:
 
 - `/login` — email verification-code login / guest
 - `/projects` — project list + API settings
-- `/p/:projectId` — workspace editor (Assistant: Chat / Agent / Tools)
+- `/p/:projectId` — workspace editor（Assistant：自然语言 +「审阅论文」芯片）
 
 ## Directory
 

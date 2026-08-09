@@ -131,10 +131,6 @@ export const en: Messages = {
   "preview.pdfReady": "PDF preview",
   "preview.htmlFallback": "HTML placeholder (no PDF yet)",
   "assistant.title": "Assistant",
-  "assistant.mode": "Mode",
-  "assistant.mode.chat": "Chat",
-  "assistant.mode.agent": "Agent",
-  "assistant.mode.tools": "Tools",
   "assistant.collapse": "Collapse",
   "assistant.resize": "Drag to resize",
   "assistant.you": "You",
@@ -149,6 +145,9 @@ export const en: Messages = {
   "assistant.q2": "Check over-strong causal claims",
   "assistant.q3": "Clean up reference formatting",
   "assistant.q4": "Diagnose compile warnings",
+  "assistant.qReview": "Review paper",
+  "assistant.review.q1":
+    "Please run a full peer review of this manuscript and provide a revision roadmap.",
   "assistant.demo.initial":
     "I can see your sepsis cohort manuscript. Ask me to revise Methods, strengthen causal language, fix LaTeX, or search related guidelines.",
   "assistant.demo.q1": "Tighten Abstract conclusions",

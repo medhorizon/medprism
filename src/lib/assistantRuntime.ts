@@ -2,6 +2,7 @@ import agentsMd from "../../AGENTS.md?raw";
 import medprismContract from "../../skills/_medprism-contract.md?raw";
 import scientificWritingSkill from "../../skills/scientific-writing/SKILL.md?raw";
 import academicPaperSkill from "../../skills/academic-paper/SKILL.md?raw";
+import academicPaperReviewerSkill from "../../skills/academic-paper-reviewer/SKILL.md?raw";
 import latexPaperEnSkill from "../../skills/latex-paper-en/SKILL.md?raw";
 import natureCitationSkill from "../../skills/nature-citation/SKILL.md?raw";
 import naturePolishingSkill from "../../skills/nature-polishing/SKILL.md?raw";
@@ -89,6 +90,9 @@ function skillBodies(
       case "academic-paper":
         chunks.push(academicPaperSkill);
         break;
+      case "academic-paper-reviewer":
+        chunks.push(academicPaperReviewerSkill);
+        break;
       case "latex-paper-en":
         chunks.push(latexPaperEnSkill);
         break;
@@ -123,22 +127,22 @@ function buildSystemPrompt(
   const ids = skillIdsForIntent(intent, userText, projectHint);
 
   const toolHint =
-    mode === "chat"
-      ? "Mode: chat (no tools). Answer only; do not claim you searched or compiled."
-      : mode === "agent"
-        ? "Mode: agent. You may receive paper_search results. Propose file edits only as suggestions (Keep required)."
-        : "Mode: tools. You may receive paper_search / compile / parse_compile_log results. Propose file edits as suggestions.";
+    mode === "review"
+      ? "Mode: review (peer review). Produce a structured referee report + revision roadmap from the manuscript context. Do not bulk-rewrite unless the user explicitly asks to apply a fix."
+      : "Mode: assistant (natural language). Skills and tools are selected automatically from the user request. Propose file edits only as suggestions (Keep required).";
 
   const pipelineHint =
-    intent === "cite"
-      ? "Pipeline: nature-citation generates BibTeX/keys from paper_search; latex-paper-en wires .bib + \\cite only (no content rewrite)."
-      : intent === "write" || intent === "nature-writing"
-        ? domain === "general"
-          ? "Pipeline: non-biomedical content → academic-paper owns manuscript content; latex-paper-en is format-only."
-          : "Pipeline: biomedical content → scientific-writing owns manuscript content; latex-paper-en is format-only."
-        : intent === "latex" || intent === "fix-compile"
-          ? "Pipeline: latex-paper-en is format/engineering only — do not rewrite scientific claims."
-          : "";
+    intent === "review"
+      ? "Pipeline: academic-paper-reviewer produces a peer-review report + revision roadmap; do not bulk-rewrite the manuscript unless the user explicitly asks to apply a fix."
+      : intent === "cite"
+        ? "Pipeline: nature-citation generates BibTeX/keys from paper_search; latex-paper-en wires .bib + \\cite only (no content rewrite)."
+        : intent === "write" || intent === "nature-writing"
+          ? domain === "general"
+            ? "Pipeline: non-biomedical content → academic-paper owns manuscript content; latex-paper-en is format-only."
+            : "Pipeline: biomedical content → scientific-writing owns manuscript content; latex-paper-en is format-only."
+          : intent === "latex" || intent === "fix-compile"
+            ? "Pipeline: latex-paper-en is format/engineering only — do not rewrite scientific claims."
+            : "";
 
   return [
     agentsMd,
@@ -284,33 +288,12 @@ export async function runAssistant(req: RuntimeRequest): Promise<RuntimeResult> 
     intent === "fix-compile" &&
     (allowed.has("compile") || allowed.has("parse_compile_log"))
   ) {
-    if (req.mode === "tools" || allowed.has("parse_compile_log")) {
-      const ctx = { ...req.ctx };
-      if (req.mode === "agent" && !ctx.lastCompileLog) {
-        toolBlocks.push(
-          "No compile log in context. Ask user to Compile first, or switch to tools mode.",
-        );
-        toolNotes.push("fix-compile: skipped (no log in agent mode)");
-      } else if (req.mode === "agent") {
-        const parsed = await runTool(
-          "parse_compile_log",
-          { log: ctx.lastCompileLog },
-          ctx,
-        );
-        if (parsed.ok) {
-          toolNotes.push("parse_compile_log: ok");
-          toolBlocks.push(
-            `TOOL parse_compile_log:\n${JSON.stringify(parsed.data, null, 2)}`,
-          );
-        }
-      } else {
-        const fix = await runCompileFixTools(ctx);
-        toolNotes.push(...fix.notes);
-        toolBlocks.push(fix.toolBlock);
-        lastCompileLog = fix.lastCompileLog ?? lastCompileLog;
-        pdfBase64 = fix.pdfBase64;
-      }
-    }
+    const ctx = { ...req.ctx };
+    const fix = await runCompileFixTools(ctx);
+    toolNotes.push(...fix.notes);
+    toolBlocks.push(fix.toolBlock);
+    lastCompileLog = fix.lastCompileLog ?? lastCompileLog;
+    pdfBase64 = fix.pdfBase64;
   }
 
   const system = buildSystemPrompt(

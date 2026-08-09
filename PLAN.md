@@ -192,6 +192,7 @@ MedPrism/
 | `academic-paper` | **非生物医学成文**（替代上一行） | imbad0202@academic-paper |
 | `nature-citation` | **只生成 citation** | yuan1z0825@nature-citation + `paper_search` |
 | `latex-paper-en` | **只改格式** + 把 citation 接入 LaTeX | bahayonghang@latex-paper-en |
+| `academic-paper-reviewer` | **审稿**报告 + 修订路线图 | imbad0202@academic-paper-reviewer |
 | `nature-polishing` | 润色（可选） | yuan1z0825@nature-polishing |
 | `nature-writing` | 仅 CNS/Nature 首稿 | yuan1z0825@nature-writing |
 | `fix-compile-errors` | 编译失败（格式/工程） | `compile` / `parse_compile_log` |

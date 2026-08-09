@@ -8,6 +8,7 @@
 | `academic-paper` | **非生物医学成文**（替代 scientific-writing） | 生物医学专项报告规范、版式、编文献 |
 | `nature-citation` | **生成 citation**：检索 → BibTeX / keys | 不改科学论述、不动版式 |
 | `latex-paper-en` | **改格式 / 接线**：宏包、浮动体、把 citation 写入 `.bib`+`\cite` | **不改写**科学内容与论证 |
+| `academic-paper-reviewer` | **审稿报告** + Revision Roadmap | 默认不大段重写成文/版式 |
 | `nature-polishing` | 语言润色（可选） | 不新增主张、不编文献 |
 | `nature-writing` | 仅明确 CNS/Nature 首稿时的内容向草稿 | 日常成文按 domain 选 scientific / academic |
 

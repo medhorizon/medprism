@@ -18,6 +18,7 @@ import {
 import { finalizeModelPatchProposal } from "./latexApply";
 import { buildWorkflowSystemPrompt } from "./prompt";
 import { runTargetedTextWorkflow } from "./textWriting";
+import { runSemanticWriting } from "./semanticWriting";
 import {
   emptyAgentResult,
   type WorkflowExecutionInput,
@@ -76,6 +77,10 @@ export const runWritingWorkflow: WorkflowHandler = async (input) => {
       kind,
       error instanceof Error ? error.message : String(error),
     );
+  }
+  if (input.request.resolvedTask) {
+    const semantic = await runSemanticWriting(snapshot, input.request.resolvedTask);
+    if (semantic) return semantic;
   }
   const skill = selectedWritingSkill(input);
   const target = input.request.plan?.target;

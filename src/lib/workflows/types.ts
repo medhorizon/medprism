@@ -7,6 +7,7 @@ import type {
   ResearchSpec,
 } from "../research/types";
 import type { ToolContext, ToolResult } from "../../tools/types";
+import type { ResolvedTask } from "../context/resolver";
 
 export type WorkflowKind =
   | "research"
@@ -15,7 +16,8 @@ export type WorkflowKind =
   | "citation"
   | "latex"
   | "compile-fix"
-  | "review";
+  | "review"
+  | "advice";
 
 /** A visible, linear runtime stage. `latex-apply` is trusted code, not an agent. */
 export type WorkflowStageKind = WorkflowKind | "latex-apply";
@@ -44,6 +46,8 @@ export type WorkflowRequest = {
   reviseProse?: boolean;
   /** Ordered runtime plan. Older callers may omit it; executor creates a safe default. */
   plan?: WorkflowPlan;
+  /** Semantic runtime context. Models never populate this field. */
+  resolvedTask?: ResolvedTask;
 };
 
 /** Model-owned prose. Trusted runtime code owns the LaTeX target and PatchSet. */

@@ -1,6 +1,7 @@
 import { chatCompletions } from "../llmClient";
 import { runResearchStage as runResearchService } from "../research/service";
 import { runTool } from "../../tools/registry";
+import { runAdviceWorkflow } from "./advice";
 import { runCitationWorkflow } from "./citation";
 import { runCompileFixWorkflow } from "./compileFix";
 import { runResearchWorkflow } from "./research";
@@ -27,6 +28,7 @@ const HANDLERS: Record<WorkflowKind, WorkflowHandler> = {
   latex: runWritingWorkflow,
   "compile-fix": runCompileFixWorkflow,
   review: runReviewWorkflow,
+  advice: runAdviceWorkflow,
 };
 
 function buildServices(
@@ -82,15 +84,17 @@ function modifiesLatex(kind: WorkflowKind): boolean {
 function normalizedPlan(input: ExecuteWorkflowInput): WorkflowPlan {
   const primary = input.request.kind;
   const supplied = input.request.plan;
-  const research = supplied?.research ?? defaultResearch(primary);
+  const research = input.request.resolvedTask
+    ? supplied?.research
+    : supplied?.research ?? defaultResearch(primary);
   const target = supplied?.target ?? (
     input.request.selection && (primary === "writing" || primary === "polish")
       ? { kind: "selection" as const, createIfMissing: false }
       : undefined
   );
-  const applyToLatex = modifiesLatex(primary);
-  const steps: WorkflowPlan["steps"] = primary === "research"
-    ? ["research"]
+  const applyToLatex = primary === "advice" ? false : modifiesLatex(primary);
+  const steps: WorkflowPlan["steps"] = primary === "research" || primary === "advice"
+    ? [primary]
     : [
         ...(research ? ["research" as const] : []),
         primary,
@@ -116,7 +120,7 @@ export function validateWorkflowResult(
   if (result.agent.schemaVersion !== "1" || result.agent.workflow !== expected) {
     return rejectedResult(expected, `Workflow returned mismatched result metadata for ${expected}`);
   }
-  if ((expected === "review" || expected === "research") && result.agent.patch) {
+  if ((expected === "review" || expected === "research" || expected === "advice") && result.agent.patch) {
     return rejectedResult(expected, `${expected} workflow must never return a PatchSet`);
   }
   if (expected !== "review" && result.agent.review) {

@@ -114,6 +114,33 @@ export function renderEmptySlot(
   return { syntax: "section", text: `\\section${starred}{${heading}}\n\n` };
 }
 
+export function renderFilledSlot(
+  profile: TemplateProfileId,
+  ref: ManuscriptSlotRef,
+  body: string,
+): { syntax: ManuscriptSyntax; text: string } {
+  const heading = displayHeading(ref);
+  if (ref.slot === "title") return { syntax: "command", text: `\\title{${body}}\n` };
+  if (ref.slot === "abstract") {
+    return profile === "springer-sn"
+      ? { syntax: "command", text: `\\abstract{${body}}\n\n` }
+      : { syntax: "environment", text: `\\begin{abstract}\n${body}\n\\end{abstract}\n\n` };
+  }
+  if (ref.slot === "keywords") {
+    if (profile === "elsevier") return { syntax: "environment", text: `\\begin{keyword}\n${body}\n\\end{keyword}\n\n` };
+    if (profile === "ieee") return { syntax: "environment", text: `\\begin{IEEEkeywords}\n${body}\n\\end{IEEEkeywords}\n\n` };
+    return { syntax: "command", text: `\\keywords{${body}}\n\n` };
+  }
+  if (profile === "springer-sn" && isBackmatter(ref) && ref.slot !== "acknowledgements") {
+    return { syntax: "declaration-item", text: `\\item ${heading}: ${body}\n` };
+  }
+  if (profile === "springer-sn" && ref.slot === "acknowledgements") {
+    return { syntax: "section", text: `\\bmhead{${heading}}\n${body}\n\n` };
+  }
+  const starred = isBackmatter(ref) ? "*" : "";
+  return { syntax: "section", text: `\\section${starred}{${heading}}\n${body}\n\n` };
+}
+
 export function planSlotInsertion(
   model: ManuscriptModel,
   ref: ManuscriptSlotRef,

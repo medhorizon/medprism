@@ -36,9 +36,10 @@ export async function runTool(
   }
 }
 
-/** Tools allowed per assistant mode (Plan8). */
-export function toolsForMode(mode: "chat" | "agent" | "tools"): string[] {
-  if (mode === "chat") return [];
-  if (mode === "agent") return ["paper_search"];
-  return ["paper_search", "compile", "parse_compile_log"];
+/** Tools allowed per assistant mode. */
+export function toolsForMode(mode: "assistant" | "review"): string[] {
+  // Unified NL assistant: auto-route skills + full tools when intent needs them.
+  if (mode === "assistant") return ["paper_search", "compile", "parse_compile_log"];
+  // Review tab: report-only, no tools.
+  return [];
 }

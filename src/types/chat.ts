@@ -1,24 +1,34 @@
-export type ChatRole = "user" | "assistant";
+import type {
+  FileSnapshot,
+  PatchPreview,
+  PatchSet,
+  PatchValidationError,
+} from "../lib/patch/schema";
 
+export type ChatRole = "user" | "assistant";
 export type SuggestionStatus = "pending" | "applied" | "undone" | "dismissed";
 
 export type ChatSuggestion = {
   title: string;
+  /** Legacy suggestion body, display-only. */
   body: string;
-  /** Explicit project-relative path for Keep */
-  path?: string;
-  status?: SuggestionStatus;
-  /** Target file id after Keep */
-  appliedTo?: string;
-  /** File content snapshot before Keep, used by Undo */
-  previousContent?: string;
+  path?: string | undefined;
+  status?: SuggestionStatus | undefined;
+  appliedTo?: string | undefined;
+  patchSet?: PatchSet | undefined;
+  patchError?: PatchValidationError | undefined;
+  previews?: PatchPreview[] | undefined;
+  previousFiles?: Record<string, FileSnapshot> | undefined;
+  postApplyHashes?: Record<string, string> | undefined;
+  appliedProjectRevision?: string | undefined;
+  legacyDisplayOnly?: boolean | undefined;
 };
 
 export type ChatMessage = {
   id: string;
   role: ChatRole;
   content: string;
-  suggestion?: ChatSuggestion;
+  suggestion?: ChatSuggestion | undefined;
 };
 
 export type ProjectFile = {

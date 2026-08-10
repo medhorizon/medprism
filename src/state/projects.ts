@@ -4,65 +4,105 @@ import {
   loadBundledOfficialTemplate,
   type ExtractedOfficialTemplate,
 } from "../templates";
+import {
+  PROJECT_SCHEMA_VERSION,
+  ProjectStore,
+  type Project,
+  type StoreError,
+  type StoreResult,
+} from "./projectStore";
 
-export type Project = {
-  id: string;
-  title: string;
-  updatedAt: string;
-  templateId: string;
-  templateName?: string;
-  files: Record<string, string>;
-  mainFile?: string;
-  fileOrder?: string[];
-};
+export type { Project } from "./projectStore";
 
-const STORAGE_KEY = "medprism.projects";
+let lastStoreError: StoreError | null = null;
+
+function store(): ProjectStore {
+  return new ProjectStore(localStorage);
+}
+
+function remember<T>(result: StoreResult<T>): StoreResult<T> {
+  lastStoreError = result.ok ? null : result.error;
+  return result;
+}
+
+export function getLastProjectStoreError(): StoreError | null {
+  return lastStoreError;
+}
+
+export function loadProjectsResult(): StoreResult<Project[]> {
+  const instance = store();
+  const migration = instance.migrateLegacy();
+  if (!migration.ok) return remember(migration);
+  return remember(instance.loadProjects());
+}
 
 export function loadProjects(): Project[] {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return [];
-    return JSON.parse(raw) as Project[];
-  } catch {
-    return [];
+  const result = loadProjectsResult();
+  return result.ok ? result.value : [];
+}
+
+export function saveProjects(projects: Project[]): StoreResult<Project[]> {
+  const instance = store();
+  const saved: Project[] = [];
+  for (const project of projects) {
+    const result = instance.saveProject(project, { expectedRevision: project.revision });
+    if (!result.ok) return remember(result);
+    saved.push(result.value);
   }
+  return remember({ ok: true, value: saved });
 }
 
-export function saveProjects(projects: Project[]) {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(projects));
+export function upsertProjectResult(
+  project: Project,
+  expectedRevision = project.revision,
+): StoreResult<Project> {
+  return remember(store().saveProject(project, { expectedRevision }));
 }
 
-export function upsertProject(project: Project) {
-  const all = loadProjects();
-  const idx = all.findIndex((p) => p.id === project.id);
-  if (idx >= 0) all[idx] = project;
-  else all.unshift(project);
-  saveProjects(all);
-  return project;
+/** Compatibility wrapper. Callers that need user-visible errors should use upsertProjectResult. */
+export function upsertProject(project: Project): Project {
+  const result = upsertProjectResult(project);
+  if (!result.ok) throw new Error(result.error.message);
+  return result.value;
+}
+
+export function getProjectResult(id: string): StoreResult<Project> {
+  return remember(store().loadProject(id));
 }
 
 export function getProject(id: string): Project | undefined {
-  return loadProjects().find((p) => p.id === id);
+  const result = getProjectResult(id);
+  if (result.ok) return result.value;
+  if (result.error.code === "PARSE_ERROR" || result.error.code === "INVALID_PROJECT") {
+    const recovered = remember(store().restoreRecovery(id));
+    return recovered.ok ? recovered.value : undefined;
+  }
+  if (result.error.code === "NOT_FOUND") return undefined;
+  return undefined;
 }
 
-export function deleteProject(id: string) {
-  saveProjects(loadProjects().filter((p) => p.id !== id));
+export function restoreProjectFromRecovery(id: string): StoreResult<Project> {
+  return remember(store().restoreRecovery(id));
+}
+
+export function deleteProject(id: string): StoreResult<void> {
+  return remember(store().deleteProject(id));
 }
 
 export function renameProject(id: string, title: string): Project | null {
-  const all = loadProjects();
-  const idx = all.findIndex((p) => p.id === id);
-  if (idx < 0) return null;
+  const current = getProject(id);
+  if (!current) return null;
   const nextTitle = title.trim();
-  if (!nextTitle) return all[idx];
-  const updated: Project = {
-    ...all[idx],
-    title: nextTitle,
-    updatedAt: new Date().toISOString(),
-  };
-  all[idx] = updated;
-  saveProjects(all);
-  return updated;
+  if (!nextTitle) return current;
+  const result = upsertProjectResult(
+    { ...current, title: nextTitle, updatedAt: new Date().toISOString() },
+    current.revision,
+  );
+  return result.ok ? result.value : null;
+}
+
+function newProject(input: Omit<Project, "schemaVersion" | "revision">): Project {
+  return { ...input, schemaVersion: PROJECT_SCHEMA_VERSION, revision: 0 };
 }
 
 export function createProjectFromExtracted(args: {
@@ -72,40 +112,32 @@ export function createProjectFromExtracted(args: {
 }): Project | null {
   const spec = getOfficialTemplate(args.templateId);
   if (!spec) return null;
-
-  const project: Project = {
+  const project = newProject({
     id: crypto.randomUUID(),
     title: args.title.trim() || spec.name,
     updatedAt: new Date().toISOString(),
     templateId: spec.id,
     templateName: spec.name,
     files: { ...args.extracted.files },
-    mainFile: args.extracted.mainFile,
-    fileOrder: args.extracted.fileOrder,
-  };
-  upsertProject(project);
-  return project;
+    ...(args.extracted.mainFile ? { mainFile: args.extracted.mainFile } : {}),
+    ...(args.extracted.fileOrder ? { fileOrder: args.extracted.fileOrder } : {}),
+  });
+  const saved = remember(store().saveProject(project, { expectedRevision: 0 }));
+  return saved.ok ? saved.value : null;
 }
 
-/** Create a project by copying the vendored official folder. */
 export async function createProjectFromBundledTemplate(args: {
   title: string;
   templateId: string;
 }): Promise<Project | null> {
   const extracted = await loadBundledOfficialTemplate(args.templateId);
-  return createProjectFromExtracted({
-    title: args.title,
-    templateId: args.templateId,
-    extracted,
-  });
+  return createProjectFromExtracted({ ...args, extracted });
 }
 
-/** Ensure the built-in sepsis demo exists for first-run UX (not an official template). */
 export function ensureDemoProject(): Project {
   const existing = getProject(DEMO_PROJECT_ID);
   if (existing) return existing;
-
-  const demo: Project = {
+  const demo = newProject({
     id: DEMO_PROJECT_ID,
     title: PROJECT_NAME,
     updatedAt: new Date().toISOString(),
@@ -114,26 +146,30 @@ export function ensureDemoProject(): Project {
     files: { ...SOURCE },
     mainFile: "main.tex",
     fileOrder: Object.keys(SOURCE),
-  };
-  upsertProject(demo);
-  return demo;
+  });
+  const saved = remember(store().saveProject(demo, { expectedRevision: 0 }));
+  if (!saved.ok) throw new Error(saved.error.message);
+  return saved.value;
 }
 
-/** Migrate stale demo keys once (old short ids → path ids) */
-export function migrateLocalProjects() {
-  const all = loadProjects();
-  let changed = false;
-  const next = all.map((p) => {
-    if (p.id !== DEMO_PROJECT_ID) return p;
-    if (p.files["main.tex"]) return p;
-    changed = true;
-    return {
-      ...p,
-      files: { ...SOURCE },
-      mainFile: "main.tex",
-      fileOrder: Object.keys(SOURCE),
-      updatedAt: new Date().toISOString(),
-    };
-  });
-  if (changed) saveProjects(next);
+export function migrateLocalProjects(): StoreResult<number> {
+  const instance = store();
+  const migrated = instance.migrateLegacy();
+  if (!migrated.ok) return remember(migrated);
+
+  const demo = instance.loadProject(DEMO_PROJECT_ID);
+  if (demo.ok && !demo.value.files["main.tex"]) {
+    const repaired = instance.saveProject(
+      {
+        ...demo.value,
+        files: { ...SOURCE },
+        mainFile: "main.tex",
+        fileOrder: Object.keys(SOURCE),
+        updatedAt: new Date().toISOString(),
+      },
+      { expectedRevision: demo.value.revision },
+    );
+    if (!repaired.ok) return remember(repaired);
+  }
+  return remember(migrated);
 }

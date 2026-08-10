@@ -1,14 +1,36 @@
+import type { ChangeEvent, SyntheticEvent } from "react";
 import { useI18n } from "../i18n/context";
+import type { TextSelection } from "../lib/context/snapshot";
 
 type SourcePaneProps = {
   fileName: string;
   value: string;
   onChange: (value: string) => void;
+  onSelectionChange?: (selection?: TextSelection) => void;
   onFixWithAi: () => void;
 };
 
-export function SourcePane({ fileName, value, onChange, onFixWithAi }: SourcePaneProps) {
+export function SourcePane({
+  fileName,
+  value,
+  onChange,
+  onSelectionChange,
+  onFixWithAi,
+}: SourcePaneProps) {
   const { t } = useI18n();
+
+  function reportSelection(event: SyntheticEvent<HTMLTextAreaElement>) {
+    const target = event.currentTarget;
+    const start = target.selectionStart;
+    const end = target.selectionEnd;
+    onSelectionChange?.(start === end ? undefined : { start, end });
+  }
+
+  function change(event: ChangeEvent<HTMLTextAreaElement>) {
+    onChange(event.target.value);
+    // Typing changes offsets; never retain a range from the previous buffer.
+    onSelectionChange?.();
+  }
 
   return (
     <div className="source-pane">
@@ -42,7 +64,10 @@ export function SourcePane({ fileName, value, onChange, onFixWithAi }: SourcePan
           className="editor"
           spellCheck={false}
           value={value}
-          onChange={(e) => onChange(e.target.value)}
+          onChange={change}
+          onSelect={reportSelection}
+          onKeyUp={reportSelection}
+          onMouseUp={reportSelection}
         />
       </div>
     </div>

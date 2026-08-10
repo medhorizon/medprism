@@ -1,97 +1,112 @@
-import type { ChatMessage } from "../types/chat";
+import { applyPatchSet, undoPatchSet } from "./patch/apply";
+import type { PatchValidationError } from "./patch/schema";
+import { validatePatchSet } from "./patch/validate";
+import type { ChatMessage, ChatSuggestion } from "../types/chat";
 
-export function resolveSuggestionTarget(
-  suggestion: { title?: string; path?: string; body?: string },
+export async function enrichSuggestion(
+  suggestion: ChatSuggestion,
   files: Record<string, string>,
-): string | undefined {
-  const keys = Object.keys(files);
-  if (!keys.length) return undefined;
+): Promise<ChatSuggestion> {
+  if (!suggestion.patchSet) {
+    return {
+      ...suggestion,
+      legacyDisplayOnly: true,
+      patchError:
+        suggestion.patchError ?? {
+          code: "INVALID_PATCH",
+          message: "Legacy suggestion is display-only. Regenerate it as a typed patch.",
+        },
+    };
+  }
 
-  const pick = (re: RegExp) =>
-    keys.find((k) => re.test(k.replace(/\\/g, "/")));
+  const validated = await validatePatchSet(files, suggestion.patchSet);
+  if (!validated.ok) {
+    return {
+      ...suggestion,
+      status: suggestion.status ?? "pending",
+      patchError: validated.error,
+      previews: undefined,
+    };
+  }
+  return {
+    ...suggestion,
+    status: suggestion.status ?? "pending",
+    patchError: undefined,
+    previews: validated.simulation.changes,
+    path: suggestion.path ?? validated.simulation.affectedPaths[0],
+  };
+}
 
-  const explicit = suggestion.path?.replace(/\\/g, "/").replace(/^\.\//, "");
-  if (explicit) {
-    if (explicit in files) return explicit;
-    const base = explicit.split("/").pop();
-    if (base) {
-      const byBase = keys.find((k) => k.replace(/\\/g, "/").endsWith("/" + base) || k === base);
-      if (byBase) return byBase;
+export type ApplySuggestionResult =
+  | {
+      ok: true;
+      files: Record<string, string>;
+      target: string;
+      affectedPaths: string[];
+      previousFiles: NonNullable<ChatSuggestion["previousFiles"]>;
+      postApplyHashes: Record<string, string>;
+      previews: NonNullable<ChatSuggestion["previews"]>;
+      baseProjectRevision: string;
+      nextProjectRevision: string;
     }
-  }
+  | { ok: false; error: PatchValidationError };
 
-  const title = suggestion.title || "";
-  if (/\.bib/i.test(title) || /bibtex|bibliograph/i.test(title)) {
-    return pick(/\.bib$/i) ?? keys.find((k) => k.endsWith(".bib"));
-  }
-  if (/methods/i.test(title)) return pick(/methods\.tex$/i) ?? pick(/methods/i);
-  if (/results/i.test(title)) return pick(/results\.tex$/i) ?? pick(/results/i);
-  if (/abstract/i.test(title)) return pick(/abstract\.tex$/i) ?? pick(/abstract/i);
-  if (/main\.tex/i.test(title)) return pick(/(^|\/)main\.tex$/i);
-
-  // BibTeX body heuristic
-  const body = suggestion.body || "";
-  if (/^\s*@\w+\{/m.test(body)) {
-    return pick(/\.bib$/i) ?? keys.find((k) => k.endsWith(".bib"));
-  }
-
-  return pick(/(^|\/)main\.tex$/i) ?? keys.find((k) => k.endsWith(".tex")) ?? keys[0];
-}
-
-function mergeSuggestionBody(previous: string, body: string, target: string): string {
-  const trimmedBody = body.trim();
-  if (target.endsWith(".bib")) {
-    // Append BibTeX entries; avoid duplicating identical blocks
-    if (previous.includes(trimmedBody)) return previous;
-    return `${previous.trimEnd()}\n\n${trimmedBody}\n`;
-  }
-  return `${previous.trimEnd()}\n\n% --- MedPrism suggestion applied ---\n${trimmedBody}\n`;
-}
-
-export function applySuggestionToFiles(
+export async function applySuggestionToFiles(
   files: Record<string, string>,
   message: ChatMessage,
-): {
-  files: Record<string, string>;
-  target: string;
-  previousContent: string;
-} | null {
-  if (!message.suggestion) return null;
-  if (message.suggestion.status === "applied") return null;
-
-  const target = resolveSuggestionTarget(message.suggestion, files);
-  if (!target) return null;
-
-  // Create .bib if suggestion targets a missing bib path
-  const pathHint = message.suggestion.path?.replace(/\\/g, "/");
-  let nextFiles = { ...files };
-  let resolved = target;
-  if (!(resolved in nextFiles) && pathHint?.endsWith(".bib")) {
-    nextFiles = { ...nextFiles, [pathHint]: "" };
-    resolved = pathHint;
+): Promise<ApplySuggestionResult> {
+  const suggestion = message.suggestion;
+  if (!suggestion?.patchSet || suggestion.legacyDisplayOnly) {
+    return {
+      ok: false,
+      error: {
+        code: "INVALID_PATCH",
+        message: "Suggestion does not contain a Keep-eligible typed patch",
+      },
+    };
   }
-  if (!(resolved in nextFiles)) return null;
 
-  const previousContent = nextFiles[resolved] ?? "";
-  const nextContent = mergeSuggestionBody(previousContent, message.suggestion.body, resolved);
-
+  const applied = await applyPatchSet(files, suggestion.patchSet);
+  if (!applied.ok) return applied;
+  const simulation = applied.simulation;
   return {
-    target: resolved,
-    previousContent,
-    files: { ...nextFiles, [resolved]: nextContent },
+    ok: true,
+    files: simulation.nextFiles,
+    target: simulation.affectedPaths.find((path) => path.toLowerCase().endsWith(".tex")) ??
+      simulation.affectedPaths[0]!,
+    affectedPaths: simulation.affectedPaths,
+    previousFiles: simulation.snapshots,
+    postApplyHashes: simulation.postApplyHashes,
+    previews: simulation.changes,
+    baseProjectRevision: simulation.baseProjectRevision,
+    nextProjectRevision: simulation.nextProjectRevision,
   };
+}
+
+export async function undoSuggestionInFiles(
+  files: Record<string, string>,
+  suggestion: ChatSuggestion,
+) {
+  if (!suggestion.previousFiles || !suggestion.postApplyHashes) {
+    return {
+      ok: false as const,
+      error: {
+        code: "INVALID_PATCH" as const,
+        message: "Undo snapshot is unavailable",
+      },
+    };
+  }
+  return undoPatchSet(files, suggestion.previousFiles, suggestion.postApplyHashes);
 }
 
 export function withSuggestionStatus(
   messages: ChatMessage[],
-  messageId: string,
-  patch: Partial<NonNullable<ChatMessage["suggestion"]>>,
+  id: string,
+  patch: Partial<ChatSuggestion>,
 ): ChatMessage[] {
-  return messages.map((m) => {
-    if (m.id !== messageId || !m.suggestion) return m;
-    return {
-      ...m,
-      suggestion: { ...m.suggestion, ...patch },
-    };
-  });
+  return messages.map((message) =>
+    message.id === id && message.suggestion
+      ? { ...message, suggestion: { ...message.suggestion, ...patch } }
+      : message,
+  );
 }

@@ -17,6 +17,13 @@ Plan5 (UI 修复) → Plan1 (登录页) → Plan2 (项目列表)
 详见 [PLAN08.md](./PLAN08.md)。  
 **Plan01 完成状态**见 [PLAN01.md](./PLAN01.md)；详规见 [PLAN01-REAL-AUTH.md](./PLAN01-REAL-AUTH.md)。
 
+### V1 优化可执行计划（当前主线）
+
+历史 Plan1–8 完成后的下一阶段实现计划在 **[`docs/plans/`](./docs/plans/README.md)**：
+
+- 总控：[`docs/plans/MASTER_PLAN.md`](./docs/plans/MASTER_PLAN.md)
+- P01–P10 + V2 backlog：各子目录 `plan.md`
+
 理由：先稳住壳层与路由，再接鉴权与数据，再接模型协议；**真编译依赖本地/服务端 TeX 环境与 Preview 接线，放在 Agent 流程之后作为独立里程碑。**
 
 ---
@@ -179,37 +186,43 @@ MedPrism/
 
 ## Plan 6 · Skill + Script
 
-### 目标
-按 OpenAI Skills 三层：Prompt 常驻、Skill 按需、Script 确定性。
+> **状态（2026-08-09）：✅ 路由 MVP 已落地** — 详见 [`skills/README.md`](./skills/README.md)。
 
-### 建议 Skill 包（先做 4 个）
-| Skill | 触发 | Script |
+### 目标
+按 OpenAI Skills 三层：Prompt 常驻、Skill 按需、Script 确定性。  
+产品语义：**自然语言 → 学术写作 → 合理修改 LaTeX（suggestion）**。
+
+### 已接线 Skill（分工已确认）
+| Skill | 触发 | 来源 / 工具 |
 |---|---|---|
-| `fix-compile-errors` | 编译失败 / Fix with AI | `parse_log.py` 或 TS 解析器 |
-| `section-revise` | 润色 / 改因果措辞 | 无（纯指令） |
-| `literature-cite` | 加引用 / Sepsis-3 | 预留检索 stub |
-| `image-to-latex` | 图转公式（后期） | 无（多模态） |
+| `scientific-writing` | **生物医学成文** | davila7@scientific-writing |
+| `academic-paper` | **非生物医学成文**（替代上一行） | imbad0202@academic-paper |
+| `nature-citation` | **只生成 citation** | yuan1z0825@nature-citation + `paper_search` |
+| `latex-paper-en` | **只改格式** + 把 citation 接入 LaTeX | bahayonghang@latex-paper-en |
+| `academic-paper-reviewer` | **审稿**报告 + 修订路线图 | imbad0202@academic-paper-reviewer |
+| `nature-polishing` | 润色（可选） | yuan1z0825@nature-polishing |
+| `nature-writing` | 仅 CNS/Nature 首稿 | yuan1z0825@nature-writing |
+| `fix-compile-errors` | 编译失败（格式/工程） | `compile` / `parse_compile_log` |
 
 ### 目录
 ```
-skills/
-  fix-compile-errors/
-    SKILL.md
-    scripts/parse_compile_log.ts
-  section-revise/
-    SKILL.md
-  literature-cite/
-    SKILL.md
+skills/                     # MedPrism 适配（运行时）
+.agents/skills/             # 上游原版（npx skills add）
+src/lib/skillRouter.ts      # 意图路由
+skills-lock.json
 ```
 
-### 运行时策略（MVP）
-1. 前端根据用户意图 / 快捷芯片选择 skill
-2. 将 `SKILL.md` body 拼进 system 或 tool 说明
-3. 需要时在浏览器或本地小服务跑 script，结果回灌模型
+### 运行时策略
+1. `detectSkillIntent` 根据用户话路由
+2. 注入 `_medprism-contract` + 对应适配 `SKILL.md`
+3. cite / fix-compile 仍走确定性 tools
 
 ### 验收
-- 「Diagnose compile warnings」走 `fix-compile-errors`，不再用关键词 if/else mock
-- Skill 可在 Cursor/Codex 侧复用同一套 `SKILL.md`
+- [x] 默认成文走 `academic-paper`（医学词叠加 `scientific-writing`）
+- [x] 引用走 `nature-citation` + Europe PMC（不编造）
+- [x] 润色 / LaTeX / CNS 首稿分路由
+- [x] 编译诊断走 `fix-compile-errors`
+- [ ] UI 快捷芯片显式选 skill（后续）
 
 ---
 
@@ -271,7 +284,7 @@ skills/
 | M1 | Plan1 + Plan2 | ✅ 登录/访客、重命名、删除确认、中英 UI（默认中文） |
 | M1.5 | **Plan01-Real** | ✅ 验证码（Resend）+ NewAPI 自动发 Key + refresh 快速登录；见 [PLAN01.md](./PLAN01.md) |
 | M2 | Plan3 | ✅ Hosted（登录签发）/ Custom（访客）均可真实对话 |
-| M3 | Plan4 + Plan6 MVP | AGENTS.md + 2 个 Skill 上线 |
+| M3 | Plan4 + Plan6 MVP | ✅ AGENTS.md + 成文/医学/LaTeX/引用/润色/CNS 路由（见 skills/README） |
 | M4 | Plan5 抛光 + 其余 Skill | 接近 Prism 日常可用性 |
 | M5 | **Plan7 真实编译** | Compile → 真 PDF + log；Preview 可滚动全文 |
 
@@ -292,5 +305,6 @@ skills/
 ## 下一步（需你拍板）
 
 1. **Plan01**：✅ 已完成（见 [PLAN01.md](./PLAN01.md)）  
-2. **Streaming / 代理不下发用户 key**：可选加固  
-3. **Plan7 编译**：✅ 已选本机 Tectonic；**暂未开工**（排在 M5）
+2. **V1 优化主线**：按 [`docs/plans/MASTER_PLAN.md`](./docs/plans/MASTER_PLAN.md) 执行（建议先 P01 Patch + P02 Context + P03 Electron Compile）  
+3. **Streaming / 代理不下发用户 key**：见 plans 中 P08 / backlog  
+4. **Plan7 / 打包编译**：与 P03、P06、P09 对齐

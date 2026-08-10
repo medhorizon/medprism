@@ -1,0 +1,132 @@
+name: Release desktop apps
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+env:
+  TECTONIC_VERSION: "0.17.0"
+
+jobs:
+  package:
+    name: Package ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Windows x64
+            os: windows-latest
+            packageScript: electron:pack:win
+            archive: tectonic-0.17.0-x86_64-pc-windows-msvc.zip
+            archiveSha256: f61ce51f0b0ade1015b7de7ef368541c5424e9756ecbd0d7af97d6d48030845f
+            asset: release/MedPrism-*-win64-portable.exe
+          - label: Linux x64
+            os: ubuntu-latest
+            packageScript: electron:pack:linux
+            archive: tectonic-0.17.0-x86_64-unknown-linux-gnu.tar.gz
+            archiveSha256: 1a715688baf591e650c8aeb160ae934e181685eecbb38b317de30b269ac5d606
+            asset: release/MedPrism-*-linux64.AppImage
+          - label: macOS arm64
+            os: macos-14
+            packageScript: electron:pack:mac
+            archive: tectonic-0.17.0-aarch64-apple-darwin.tar.gz
+            archiveSha256: a3f1cac7c5678f01661a92212f58480ae3b0634115d880dbc59e2953ded45667
+            asset: release/MedPrism-*-macos-arm64.dmg
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Verify tag matches package version
+        shell: bash
+        run: |
+          package_version="$(node -p "require('./package.json').version")"
+          test "$GITHUB_REF_NAME" = "v${package_version}"
+
+      - name: Bundle Tectonic (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $url = "https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%40${env:TECTONIC_VERSION}/${{ matrix.archive }}"
+          Invoke-WebRequest -Uri $url -OutFile tectonic.zip
+          $digest = (Get-FileHash tectonic.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($digest -ne "${{ matrix.archiveSha256 }}") { throw "Tectonic archive checksum mismatch" }
+          Expand-Archive tectonic.zip -DestinationPath .tectonic
+          New-Item -ItemType Directory -Force resources/tectonic/win32-x64 | Out-Null
+          $binary = Get-ChildItem .tectonic -Recurse -Filter tectonic.exe | Select-Object -First 1
+          if (-not $binary) { throw "Tectonic executable was not found in the official archive" }
+          Copy-Item $binary.FullName resources/tectonic/win32-x64/tectonic.exe
+
+      - name: Bundle Tectonic (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%40${TECTONIC_VERSION}/${{ matrix.archive }}"
+          curl --fail --location "$url" --output tectonic.tar.gz
+          echo "${{ matrix.archiveSha256 }}  tectonic.tar.gz" | sha256sum --check
+          mkdir -p .tectonic resources/tectonic/linux-x64
+          tar -xzf tectonic.tar.gz -C .tectonic
+          binary="$(find .tectonic -type f -name tectonic -print -quit)"
+          test -n "$binary"
+          cp "$binary" resources/tectonic/linux-x64/tectonic
+          chmod +x resources/tectonic/linux-x64/tectonic
+
+      - name: Bundle Tectonic (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%40${TECTONIC_VERSION}/${{ matrix.archive }}"
+          curl --fail --location "$url" --output tectonic.tar.gz
+          echo "${{ matrix.archiveSha256 }}  tectonic.tar.gz" | shasum -a 256 --check
+          mkdir -p .tectonic resources/tectonic/darwin-arm64
+          tar -xzf tectonic.tar.gz -C .tectonic
+          binary="$(find .tectonic -type f -name tectonic -print -quit)"
+          test -n "$binary"
+          cp "$binary" resources/tectonic/darwin-arm64/tectonic
+          chmod +x resources/tectonic/darwin-arm64/tectonic
+
+      - name: Build package
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: npm run ${{ matrix.packageScript }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.packageScript }}
+          path: ${{ matrix.asset }}
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" release-assets/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "MedPrism $GITHUB_REF_NAME" \
+            --generate-notes

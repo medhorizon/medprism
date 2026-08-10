@@ -1,3 +1,4 @@
+import { fileBytesForExport } from "./projectBinary";
 import { assertSafeProjectRelativePath } from "./projectPath";
 
 function crc32(bytes: Uint8Array): number {
@@ -45,7 +46,7 @@ export function projectFilesToZip(files: Record<string, string>): Uint8Array {
   for (const [rawPath, content] of Object.entries(files).sort(([a], [b]) => a.localeCompare(b))) {
     const safePath = assertSafeProjectRelativePath(rawPath);
     const name = encoder.encode(safePath);
-    const data = encoder.encode(content);
+    const data = fileBytesForExport(content);
     const crc = crc32(data);
     const local = concat([
       u32(0x04034b50),

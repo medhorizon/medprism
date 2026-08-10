@@ -27,7 +27,7 @@
 
 V1 优先简单方案：
 
-- [ ] Electron packaged app 使用 `HashRouter`，或已经验证安全的自定义协议。
+- [x] Electron packaged app 使用 `HashRouter`，或已经验证安全的自定义协议。
 - [ ] `/projects`
 - [ ] `/p/:projectId`
 - [ ] 登录页

@@ -50,7 +50,14 @@ export const env = {
   mailFrom: (process.env.MAIL_FROM || "").trim(),
   /** When true, log OTP plaintext even for resend (dev only). */
   mailDebug: process.env.MAIL_DEBUG === "1",
-  corsOrigin: process.env.CORS_ORIGIN || "http://localhost:5173",
+  /** Comma-separated allowlist. Include `null` for Electron file:// clients. */
+  corsOrigins: (process.env.CORS_ORIGIN || "http://localhost:5173")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean),
+  get corsOrigin() {
+    return this.corsOrigins[0] || "http://localhost:5173";
+  },
   hostedDefaultModel: process.env.HOSTED_DEFAULT_MODEL || "deepseek-v4-flash",
   /** NewAPI management root, e.g. https://newapi.medhorizon.icu */
   newApiBaseUrl: (process.env.NEWAPI_BASE_URL || "").replace(/\/+$/, ""),

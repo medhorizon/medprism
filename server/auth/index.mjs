@@ -40,7 +40,7 @@ async function sessionPayload(user) {
 }
 
 const server = http.createServer(async (req, res) => {
-  setCors(res);
+  setCors(res, req);
 
   if (req.method === "OPTIONS") {
     res.statusCode = 204;

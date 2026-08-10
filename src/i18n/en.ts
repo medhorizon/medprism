@@ -36,7 +36,7 @@ export const en: Messages = {
   "login.codeSentStub": "Code sent (stub test code: {code})",
   "login.codeSentReal": "Code sent to your email. Check inbox and spam.",
   "login.rateLimited": "Too many requests. Please wait and try again.",
-  "login.networkError": "Cannot reach the auth server. Make sure npm run auth:server is running.",
+  "login.networkError": "Cannot reach the auth server. Start npm run auth:server locally, or continue as guest and set your own API.",
   "login.stubModeHint": "Stub mode (VITE_AUTH_BASE_URL missing or VITE_AUTH_STUB=1).",
   "login.quickSignIn": "Quick sign-in (no code)",
   "login.quickSignInHint": "A saved login was found on this device. Restore your API config in one click.",

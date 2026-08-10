@@ -23,11 +23,13 @@ npm run auth:server
 npm run dev
 ```
 
-Frontend must set:
+Frontend must set for local Vite:
 
 ```bash
 VITE_AUTH_BASE_URL=http://localhost:8787
 ```
+
+Packaged Electron / CI production builds read [`.env.production`](../.env.production) (`https://auth.medhorizon.icu`). Electron `file://` clients need `null` in the auth server `CORS_ORIGIN` allowlist.
 
 ## Login flow
 

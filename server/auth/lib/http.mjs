@@ -1,13 +1,22 @@
 import { env } from "./env.mjs";
 
-export function setCors(res) {
-  res.setHeader("Access-Control-Allow-Origin", env.corsOrigin);
+export function setCors(res, req) {
+  const requestOrigin = req?.headers?.origin;
+  const allowed = env.corsOrigins;
+  let allowOrigin = env.corsOrigin;
+  if (requestOrigin && allowed.includes(requestOrigin)) {
+    allowOrigin = requestOrigin;
+  }
+  res.setHeader("Access-Control-Allow-Origin", allowOrigin);
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
   res.setHeader(
     "Access-Control-Allow-Headers",
     "Content-Type, Authorization",
   );
   res.setHeader("Access-Control-Max-Age", "86400");
+  if (allowOrigin !== "*") {
+    res.setHeader("Vary", "Origin");
+  }
 }
 
 export function sendJson(res, status, body) {

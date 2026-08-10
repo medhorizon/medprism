@@ -34,7 +34,7 @@ export const zh: Messages = {
   "login.codeSentStub": "验证码已发送（stub 测试码：{code}）",
   "login.codeSentReal": "验证码已发送到邮箱，请查收（含垃圾邮件箱）。",
   "login.rateLimited": "发送过于频繁，请稍后再试。",
-  "login.networkError": "无法连接认证服务。请确认已运行 npm run auth:server。",
+  "login.networkError": "无法连接认证服务。请确认本机已运行 npm run auth:server；也可使用访客模式并自行配置 API。",
   "login.stubModeHint": "当前为 stub 模式（未配置 VITE_AUTH_BASE_URL 或 VITE_AUTH_STUB=1）。",
   "login.quickSignIn": "快速登录（免验证码）",
   "login.quickSignInHint": "检测到本机已保存的登录凭证，可一键取回 API 配置。",

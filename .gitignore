@@ -13,6 +13,10 @@ dist-ssr
 release
 *.local
 
+# Optional local Tectonic engines (do not commit upstream binaries)
+resources/tectonic/*/tectonic
+resources/tectonic/*/tectonic.exe
+
 # Optional: uncomment to skip committing upstream skill copies (~2MB)
 # .agents/
 

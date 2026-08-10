@@ -46,8 +46,9 @@ const LATEX_RE =
   /booktabs|换投|venue|格式化|ieee|acm|neurips|overfull|underfull|float too large|伪代码|pseudocode|三线表|表格格式|table\s+format|改\s*格式|调整\s*latex|只.*latex|fix\s*latex|latex\s*format|接(好|入)\s*引用/i;
 const RESEARCH_RE =
   /(?:请|帮我|请帮我|麻烦(?:帮我)?|先)?\s*(?:调研|做(?:一份)?(?:文献)?调研|查(?:一)?下(?:资料|文献)?|查资料|检索(?:一下)?(?:相关)?(?:文献)?|搜索(?:一下)?(?:相关)?(?:文献)?|研究一下)|\b(?:research|investigate|literature\s+search|survey\s+the\s+literature|search\s+the\s+literature)\b/i;
+/** Natural-language draft/edit intents (not limited to “写/draft”). */
 const WRITING_ACTION_RE =
-  /写|撰写|起草|生成|准备|拟(?:一份|一个|一段)?|补充|完善|修改|draft|write|prepare|compose|revise/i;
+  /写|撰写|起草|生成|准备|拟(?:一份|一个|一段|题|个标题|个题目)?|补充|完善|修改|更新|替换|换成|改成|改为|补上|加上|填上|填入|取(?:个|一个|一下)?(?:标题|题目)|拟题|起名|想(?:个|一个).{0,12}(?:标题|题目)|定(?:个|一个).{0,12}(?:标题|题目)|draft|write|prepare|compose|revise|create|make|generate|propose|suggest/i;
 const SELECTION_RE =
   /这段|这句|这句话|选区|所选|selected\s+(?:text|paragraph|sentence)|this\s+(?:paragraph|sentence|selection)/i;
 
@@ -79,7 +80,7 @@ const COMMAND_WORKFLOWS: Array<{ pattern: RegExp; kind: WorkflowKind }> = [
 
 const TARGET_PATTERNS: Array<{ pattern: RegExp; target: LatexTargetSpec }> = [
   { pattern: /摘要|abstract/i, target: { kind: "abstract", createIfMissing: true } },
-  { pattern: /标题|题目|title/i, target: { kind: "title", createIfMissing: false } },
+  { pattern: /标题|题目|title/i, target: { kind: "title", createIfMissing: true } },
   { pattern: /关键词|关键字|keywords?/i, target: { kind: "keywords", createIfMissing: true } },
   { pattern: /引言|绪论|背景部分|introduction/i, target: { kind: "introduction", createIfMissing: true } },
   { pattern: /材料与方法|患者与方法|研究方法|方法学|方法部分|methods?|methodology|materials?\s+and\s+methods?/i, target: { kind: "methods", createIfMissing: true } },
@@ -154,7 +155,7 @@ export function detectLatexTarget(text: string): LatexTargetSpec | undefined {
   const targetAction =
     WRITING_ACTION_RE.test(text) ||
     POLISH_RE.test(text) ||
-    /写入|插入|放入|放到|填入|填充|更新|替换|add\s+to|insert\s+into|put\s+in/i.test(text);
+    /写入|插入|放入|放到|填充|add\s+to|insert\s+into|put\s+in/i.test(text);
   if (!targetAction) return undefined;
 
   const known = TARGET_PATTERNS.find((candidate) => candidate.pattern.test(text));

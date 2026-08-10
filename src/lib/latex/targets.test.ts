@@ -4,8 +4,10 @@ import { simulatePatchSet } from "../patch/simulate";
 import {
   buildAbstractPatch,
   escapeLatexPlainText,
+  locateLatexCommands,
   maskLatexComments,
   resolveAbstractTarget,
+  structuralMask,
 } from "./targets";
 
 async function snapshot(source: string) {
@@ -189,4 +191,52 @@ describe("LaTeX abstract targeting", () => {
   it("escapes LaTeX-special characters in plain model prose", () => {
     expect(escapeLatexPlainText("A&B_50% #1")).toBe("A\\&B\\_50\\% \\#1");
   });
+
+  it("locates commands with optional arguments without matching longer names", () => {
+    const source = [
+      "\\titlepage",
+      "\\title[Short]{Full Title}",
+      "\\abstract[heading]{Abstract with \\textbf{nested} text.}",
+      "\\section*[Methods]{Methods}",
+    ].join("\n");
+    const masked = structuralMask(source);
+    const titles = locateLatexCommands(source, masked, "title");
+    expect(titles).toHaveLength(1);
+    expect(titles[0]!.optionalArg).toBe("Short");
+    expect(source.slice(titles[0]!.bodyStart, titles[0]!.bodyEnd)).toBe("Full Title");
+
+    const abstracts = locateLatexCommands(source, masked, "abstract");
+    expect(abstracts).toHaveLength(1);
+    expect(abstracts[0]!.optionalArg).toBe("heading");
+    expect(source.slice(abstracts[0]!.bodyStart, abstracts[0]!.bodyEnd)).toBe(
+      "Abstract with \\textbf{nested} text.",
+    );
+
+    const sections = locateLatexCommands(source, masked, "section", { allowStar: true });
+    expect(sections).toHaveLength(1);
+    expect(sections[0]!.star).toBe(true);
+    expect(sections[0]!.optionalArg).toBe("Methods");
+    expect(source.slice(sections[0]!.bodyStart, sections[0]!.bodyEnd)).toBe("Methods");
+  });
+
+  it("resolves \\abstract[opt]{body} through the shared command locator", async () => {
+    const source = [
+      "\\documentclass{article}",
+      "\\begin{document}",
+      "\\abstract[Summary]{Active abstract body.}",
+      "\\end{document}",
+    ].join("\n");
+    const context = await buildContextSnapshot({
+      projectId: "project-1",
+      files: { "main.tex": source },
+      mainFile: "main.tex",
+      activeFile: "main.tex",
+    });
+    const resolved = resolveAbstractTarget(context);
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    expect(resolved.target.existingText).toBe("Active abstract body.");
+    expect(resolved.target.openingAnchor).toBe("\\abstract[Summary]{");
+  });
 });
+

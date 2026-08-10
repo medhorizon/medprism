@@ -1,3 +1,10 @@
 ﻿Source: Springer Nature journal article template (content 18782940 v12)
 Official: https://www.springernature.com/gp/authors/campaigns/latex-author-support
 Vendored for MedPrism. Follow publisher redistribution terms.
+
+MedPrism notes:
+- sn-article.tex is a minimal starter that compiles under Tectonic/XeTeX.
+- sn-article.official-sample.tex is the official sample with XeTeX-hostile
+  \verb+\begin{verbatim}+ / lstlisting demos neutralized.
+- Always keep the documentclass [pdflatex,...] option so sn-jnl does not
+  load breakurl (incompatible with XeTeX).

@@ -7,5 +7,6 @@ MedPrism resolves Tectonic in this order:
 3. `tectonic` on `PATH`
 
 Expected packaged directories include `win32-x64`, `linux-x64`, and
-`darwin-arm64`. This repository intentionally does not redistribute binaries;
-add reviewed upstream binaries and license notices before a public release.
+`darwin-arm64`. Binaries are gitignored; place a reviewed upstream
+`tectonic` / `tectonic.exe` under the matching platform folder before
+`npm run electron:pack:*` so `extraResources` ships it in the portable build.

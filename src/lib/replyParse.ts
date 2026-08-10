@@ -66,6 +66,18 @@ function hasPayload(value: unknown): boolean {
   return value !== undefined && value !== null;
 }
 
+/** Empty operations mean “no file edit”; treat as omitted patchProposal. */
+function isEmptyPatchProposal(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const operations = (value as Record<string, unknown>).operations;
+  return Array.isArray(operations) && operations.length === 0;
+}
+
+function effectivePatchProposal(value: unknown): unknown | undefined {
+  if (!hasPayload(value) || isEmptyPatchProposal(value)) return undefined;
+  return value;
+}
+
 /** Strict typed model-envelope parser. Runtime metadata never comes from the model. */
 export function parseModelWorkflowEnvelope(
   raw: string,
@@ -116,8 +128,10 @@ export function parseModelWorkflowEnvelope(
     : hasPayload(record.writingDraft)
       ? record.writingDraft
       : undefined;
+  const patchProposalValue = effectivePatchProposal(record.patchProposal);
+  const emptyPatchOmitted = hasPayload(record.patchProposal) && patchProposalValue === undefined;
   const payloadCount = [
-    hasPayload(record.patchProposal),
+    hasPayload(patchProposalValue),
     hasPayload(textDraftValue),
     hasPayload(record.citationPlan),
     hasPayload(record.researchReport),
@@ -128,8 +142,8 @@ export function parseModelWorkflowEnvelope(
   }
 
   let proposal: ModelPatchProposal | undefined;
-  if (hasPayload(record.patchProposal)) {
-    const parsed = parseModelPatchProposal(record.patchProposal);
+  if (hasPayload(patchProposalValue)) {
+    const parsed = parseModelPatchProposal(patchProposalValue);
     if (!parsed.ok) {
       return { ok: false, error: parsed.error, rawContent: raw.trim() };
     }
@@ -142,7 +156,9 @@ export function parseModelWorkflowEnvelope(
       schemaVersion: "1",
       workflow: expectedWorkflow,
       summary: record.summary.trim(),
-      warnings,
+      warnings: emptyPatchOmitted
+        ? [...warnings, "Model returned an empty patchProposal; treated as advice-only (no Keep)."]
+        : warnings,
       content: typeof record.content === "string" ? record.content.trim() : "",
       ...(proposal ? { proposal } : {}),
       ...(hasPayload(textDraftValue)
@@ -172,8 +188,9 @@ export function parseProposalEnvelope(raw: string): ProposalEnvelope {
     const envelope = parsed as Record<string, unknown>;
     const content = typeof envelope.content === "string" ? envelope.content : "";
 
-    if (hasPayload(envelope.patchProposal)) {
-      const proposal = parseModelPatchProposal(envelope.patchProposal);
+    const patchProposalValue = effectivePatchProposal(envelope.patchProposal);
+    if (hasPayload(patchProposalValue)) {
+      const proposal = parseModelPatchProposal(patchProposalValue);
       if (!proposal.ok) return { content, error: proposal.error };
       return { content, proposal: proposal.proposal };
     }

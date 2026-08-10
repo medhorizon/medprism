@@ -46,4 +46,7 @@ export type ResolvedLatexTarget = {
   syntax?: "command" | "environment" | "section" | "selection" | "body";
   openingAnchor?: string;
   openingRange?: SourceRange;
+  /** Optional short-argument text from `\command[short]{body}`. */
+  optionalArg?: string;
+  optionalArgRange?: SourceRange;
 };

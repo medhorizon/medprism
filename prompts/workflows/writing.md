@@ -25,4 +25,4 @@ Return one JSON object:
 }
 ```
 
-`patchProposal` is optional when no safe edit can be located. Omit the field entirely in that case; do not return `patchProposal: null`. For a new local insertion, use one uniquely anchored `insert_before` or `insert_after` operation. Do not return `patch`, `patchSet`, hashes, revisions, `bib_add`, or a whole-file replacement.
+`patchProposal` is optional when no safe edit can be located. Omit the field entirely in that case; do not return `patchProposal: null` or `operations: []`. When the runtime has already located a named target (title, abstract, Methods, …), return `textDraft` instead of inventing file paths. For a new local insertion without a runtime target, use one uniquely anchored `insert_before` or `insert_after` operation. Do not return `patch`, `patchSet`, hashes, revisions, `bib_add`, or a whole-file replacement.

@@ -9,15 +9,19 @@ let disposeCompileService = null;
 
 function resolveTectonicExecutable() {
   const configured = process.env.MEDPRISM_TECTONIC_PATH;
-  if (configured) return configured;
+  if (configured && fs.existsSync(configured)) return configured;
   const executable = process.platform === "win32" ? "tectonic.exe" : "tectonic";
-  const bundled = path.join(
-    process.resourcesPath,
-    "tectonic",
-    `${process.platform}-${process.arch}`,
-    executable,
-  );
-  return fs.existsSync(bundled) ? bundled : executable;
+  const platformDir = `${process.platform}-${process.arch}`;
+  const candidates = [
+    // Packaged app: extraResources → resources/tectonic/<platform>/
+    path.join(process.resourcesPath, "tectonic", platformDir, executable),
+    // Local/dev Electron: repo resources/tectonic/<platform>/
+    path.join(__dirname, "..", "resources", "tectonic", platformDir, executable),
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return executable;
 }
 
 function createWindow() {

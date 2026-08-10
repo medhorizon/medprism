@@ -4,8 +4,8 @@ import type { PatchSet, SourceRange } from "../patch/schema";
 import { assertSafeProjectRelativePath } from "../projectPath";
 import {
   escapeLatexPlainText,
-  findMatchingBrace,
   latexExcerpt,
+  locateLatexCommands,
   resolveAbstractTarget,
   structuralMask,
 } from "./targets";
@@ -116,28 +116,20 @@ function locateCommandBodies(
   commandName: "title" | "keywords",
 ): ResolvedLatexTarget[] {
   const masked = structuralMask(source);
-  const pattern = new RegExp(`\\\\${commandName}\\s*\\{`, "g");
-  const targets: ResolvedLatexTarget[] = [];
-  for (const match of masked.matchAll(pattern)) {
-    if (match.index === undefined) continue;
-    const opening = masked.indexOf("{", match.index);
-    if (opening < 0) continue;
-    const closing = findMatchingBrace(masked, opening);
-    if (closing < 0) continue;
-    targets.push({
-      kind: commandName,
-      path,
-      mode: "replace_body",
-      syntax: "command",
-      commandName,
-      existingText: source.slice(opening + 1, closing),
-      sourceContext: latexExcerpt(source, match.index, closing + 1),
-      range: { start: opening + 1, end: closing },
-      openingAnchor: source.slice(match.index, opening + 1),
-      openingRange: { start: match.index, end: opening + 1 },
-    });
-  }
-  return targets;
+  return locateLatexCommands(source, masked, commandName).map((command) => ({
+    kind: commandName,
+    path,
+    mode: "replace_body" as const,
+    syntax: "command" as const,
+    commandName,
+    existingText: source.slice(command.bodyStart, command.bodyEnd),
+    sourceContext: latexExcerpt(source, command.commandStart, command.commandEnd),
+    range: { start: command.bodyStart, end: command.bodyEnd },
+    openingAnchor: command.openingAnchor,
+    openingRange: { start: command.commandStart, end: command.bodyStart },
+    ...(command.optionalArg !== undefined ? { optionalArg: command.optionalArg } : {}),
+    ...(command.optionalArgRange ? { optionalArgRange: command.optionalArgRange } : {}),
+  }));
 }
 
 function locateKeywordEnvironments(path: string, source: string): ResolvedLatexTarget[] {
@@ -169,28 +161,18 @@ function locateKeywordEnvironments(path: string, source: string): ResolvedLatexT
 
 function locateSections(path: string, source: string): LocatedSection[] {
   const masked = structuralMask(source);
-  const headingPattern = /\\(?:section\*?|bmhead)\s*\{/g;
-  const raw: Array<{ title: string; start: number; end: number }> = [];
-  for (const match of masked.matchAll(headingPattern)) {
-    if (match.index === undefined) continue;
-    const opening = masked.indexOf("{", match.index);
-    if (opening < 0) continue;
-    const closing = findMatchingBrace(masked, opening);
-    if (closing < 0) continue;
-    raw.push({
-      title: source.slice(opening + 1, closing),
-      start: match.index,
-      end: closing + 1,
-    });
-  }
+  const commands = [
+    ...locateLatexCommands(source, masked, "section", { allowStar: true }),
+    ...locateLatexCommands(source, masked, "bmhead"),
+  ].sort((left, right) => left.commandStart - right.commandStart);
   const endDocument = masked.search(/\\end\s*\{\s*document\s*\}/);
-  return raw.map((heading, index) => ({
+  return commands.map((command, index) => ({
     path,
-    title: heading.title,
-    headingStart: heading.start,
-    headingEnd: heading.end,
-    bodyStart: heading.end,
-    bodyEnd: raw[index + 1]?.start ?? (endDocument >= 0 ? endDocument : source.length),
+    title: source.slice(command.bodyStart, command.bodyEnd),
+    headingStart: command.commandStart,
+    headingEnd: command.commandEnd,
+    bodyStart: command.commandEnd,
+    bodyEnd: commands[index + 1]?.commandStart ?? (endDocument >= 0 ? endDocument : source.length),
   }));
 }
 
@@ -232,7 +214,11 @@ function sectionPatterns(kinds: readonly LatexTargetKind[]): RegExp[] {
   const aliases = kinds.flatMap((kind) => TARGET_ALIASES[kind] ?? []);
   return aliases.map((alias) => {
     const escaped = alias.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
-    return new RegExp(`\\\\(?:section\\*?|bmhead)\\s*\\{\\s*${escaped}\\s*\\}`, "i");
+    // Allow optional short-title args: \section[short]{Introduction}
+    return new RegExp(
+      `\\\\(?:section\\*?|bmhead)\\s*(?:\\[[^\\]]*\\]\\s*)?\\{\\s*${escaped}\\s*\\}`,
+      "i",
+    );
   });
 }
 
@@ -286,20 +272,53 @@ function safeInsertionAnchor(
   }
 
   if (kind === "keywords") {
-    const anchor = firstMatchRange(source, [
-      /\\abstract\s*\{/i,
-      /\\begin\s*\{\s*abstract\s*\}/i,
+    // Journal templates (e.g. sn-jnl) place keywords after abstract and before \maketitle.
+    const beforeMaketitle = firstMatchRange(source, [
       /\\maketitle\b/i,
-      /\\(?:section\*?|bmhead)\s*\{[^}]+\}/i,
+      /\\(?:section\*?|bmhead)\s*(?:\[[^\]]*\]\s*)?\{/i,
     ]);
-    return anchor ? { mode: "insert_before", ...anchor } : null;
+    if (beforeMaketitle) return { mode: "insert_before", ...beforeMaketitle };
+    const masked = structuralMask(source);
+    const abstractCommand = locateLatexCommands(source, masked, "abstract")[0];
+    if (abstractCommand) {
+      return {
+        mode: "insert_after",
+        text: source.slice(abstractCommand.commandStart, abstractCommand.commandEnd),
+        range: { start: abstractCommand.commandStart, end: abstractCommand.commandEnd },
+      };
+    }
+    const endAbstract = firstMatchRange(source, [/\\end\s*\{\s*abstract\s*\}/i]);
+    return endAbstract ? { mode: "insert_after", ...endAbstract } : null;
   }
 
   if (kind === "title") {
-    const anchor = firstMatchRange(source, [/\\begin\s*\{\s*document\s*\}/i]);
-    return anchor ? { mode: "insert_before", ...anchor } : null;
+    // Prefer inside the document body (Springer sn-jnl / many journal classes).
+    const frontMatter = firstMatchRange(source, [
+      /\\author\*?(?![A-Za-z@])/i,
+      /\\maketitle\b/i,
+      /\\(?:section\*?|bmhead)\s*(?:\[[^\]]*\]\s*)?\{/i,
+    ]);
+    const beginDocument = firstMatchRange(source, [/\\begin\s*\{\s*document\s*\}/i]);
+    if (
+      beginDocument &&
+      frontMatter &&
+      frontMatter.range.start >= beginDocument.range.end
+    ) {
+      return { mode: "insert_before", ...frontMatter };
+    }
+    if (beginDocument) return { mode: "insert_after", ...beginDocument };
+    return null;
   }
   return null;
+}
+
+/** Short running-head title derived from the full title body. */
+function shortTitleFrom(fullTitle: string): string {
+  const compact = fullTitle.replace(/\s+/g, " ").trim();
+  const clause = compact.split(/[:.?!—–]/u)[0]?.trim() || compact;
+  if (clause.length <= 60) return clause;
+  const sliced = clause.slice(0, 57).replace(/\s+\S*$/, "").trim();
+  return `${sliced || clause.slice(0, 57)}...`;
 }
 
 function displayHeading(spec: LatexTargetSpec): string {
@@ -441,12 +460,41 @@ export function resolveLatexTarget(
 
   if (matches.length === 1) return { ok: true, target: matches[0]! };
   if (matches.length > 1) {
+    const preferred = preferCanonicalTargets(snapshot, matches);
+    if (preferred.length === 1) return { ok: true, target: preferred[0]! };
     return {
       ok: false,
       message: `Multiple ${spec.kind} targets were found; select or specify the intended file.`,
     };
   }
   return insertionTarget(snapshot, spec);
+}
+
+/**
+ * When duplicate structural targets exist (e.g. a stale preamble \\title plus the
+ * real journal \\title after \\begin{document}), prefer the in-document one.
+ */
+function preferCanonicalTargets(
+  snapshot: ContextSnapshot,
+  matches: ResolvedLatexTarget[],
+): ResolvedLatexTarget[] {
+  const scored = matches.map((target) => {
+    const source = snapshot.files[target.path] ?? "";
+    const masked = structuralMask(source);
+    const beginDocument = masked.search(/\\begin\s*\{\s*document\s*\}/);
+    const maketitle = masked.search(/\\maketitle\b/);
+    const start = target.range?.start ?? target.openingRange?.start ?? target.sourceContext.length;
+    let score = 0;
+    if (beginDocument >= 0 && start >= beginDocument) score += 100;
+    if (maketitle >= 0 && start <= maketitle) score += 20;
+    if (target.optionalArg !== undefined) score += 10;
+    if (target.path === snapshot.mainFile) score += 5;
+    if (target.path === snapshot.activeFile) score += 2;
+    return { target, score, start };
+  });
+  scored.sort((left, right) => right.score - left.score || left.start - right.start);
+  const best = scored[0]!.score;
+  return scored.filter((entry) => entry.score === best).map((entry) => entry.target);
 }
 
 function normalizePlainDraft(text: string): string {
@@ -537,20 +585,42 @@ export async function buildLatexTextPatch(args: {
 
   if (args.target.mode === "replace_body" && args.target.range) {
     if (args.target.existingText.length > 0) {
-      const newText = args.target.syntax === "environment"
-        ? `\n${renderedText}\n`
-        : args.target.syntax === "section"
-          ? `\n${renderedText}\n\n`
-          : renderedText;
-      operation = {
-        op: "replace_text",
-        path: args.target.path,
-        baseSha256,
-        oldText: args.target.existingText,
-        newText,
-        expectedOccurrences: 1,
-        range: args.target.range,
-      };
+      // When `\title[Same]{Same}` (common journal placeholder), update both args together
+      // so running heads do not keep the stale short title.
+      if (
+        args.target.kind === "title" &&
+        args.target.optionalArg !== undefined &&
+        args.target.optionalArgRange &&
+        args.target.optionalArg === args.target.existingText
+      ) {
+        const short = shortTitleFrom(renderedText);
+        const spanStart = args.target.optionalArgRange.start - 1;
+        const spanEnd = args.target.range.end + 1;
+        operation = {
+          op: "replace_text",
+          path: args.target.path,
+          baseSha256,
+          oldText: source.slice(spanStart, spanEnd),
+          newText: `[${short}]{${renderedText}}`,
+          expectedOccurrences: 1,
+          range: { start: spanStart, end: spanEnd },
+        };
+      } else {
+        const newText = args.target.syntax === "environment"
+          ? `\n${renderedText}\n`
+          : args.target.syntax === "section"
+            ? `\n${renderedText}\n\n`
+            : renderedText;
+        operation = {
+          op: "replace_text",
+          path: args.target.path,
+          baseSha256,
+          oldText: args.target.existingText,
+          newText,
+          expectedOccurrences: 1,
+          range: args.target.range,
+        };
+      }
     } else if (args.target.openingAnchor && args.target.openingRange) {
       operation = {
         op: "replace_text",

@@ -19,16 +19,6 @@
 % $Id: elsarticle.dtx 286 2026-01-09 05:51:42Z rishi $
 % $URL: https://lenova.river-valley.com/svn/elsarticle/trunk/elsarticle.dtx $
 % \iffalse
-\documentclass{ltxdoc}
-\EnableCrossrefs         
-\CodelineIndex
-\RecordChanges
-\usepackage{comment}
-\begin{document}
-  \DocInput{elsarticle.dtx}
-  \PrintChanges
-  \PrintIndex
-\end{document}
 % \fi
 %
 % \CharacterTable

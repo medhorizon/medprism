@@ -185,10 +185,27 @@ function isCompileToolPayload(value: unknown): value is {
   log: string;
   pdfBase64?: string;
   error?: string;
+  code?: string;
 } {
   if (!value || typeof value !== "object") return false;
   const record = value as Record<string, unknown>;
   return typeof record.compileOk === "boolean" && typeof record.log === "string";
+}
+
+function engineUnavailableMessage(log: string, error?: string, code?: string): string | undefined {
+  const combined = `${code ?? ""}\n${error ?? ""}\n${log}`;
+  if (
+    code === "ENGINE_UNAVAILABLE" ||
+    /Failed to start Tectonic/i.test(combined) ||
+    /spawn .*tectonic/i.test(combined)
+  ) {
+    return [
+      "未找到本地 Tectonic 编译引擎，因此无法编译或定位 LaTeX 错误。",
+      "请安装 Tectonic 并确保 `tectonic` 在 PATH 中，或设置环境变量 MEDPRISM_TECTONIC_PATH。",
+      "说明见 docs/compile-setup.md。未猜测或修改任何文件。",
+    ].join(" ");
+  }
+  return undefined;
 }
 
 function invalidCompileFixResult(
@@ -226,6 +243,10 @@ export const runCompileFixWorkflow: WorkflowHandler = async (input) => {
       lastCompileLog: log,
       ...(compiled.data.pdfBase64 ? { pdfBase64: compiled.data.pdfBase64 } : {}),
     };
+  }
+  const engineMessage = engineUnavailableMessage(log, compiled.data.error, compiled.data.code);
+  if (engineMessage) {
+    return invalidCompileFixResult(engineMessage, "", log);
   }
   if (!log.trim()) {
     return invalidCompileFixResult(

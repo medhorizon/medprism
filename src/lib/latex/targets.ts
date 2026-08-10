@@ -108,12 +108,22 @@ export function structuralMask(source: string): string {
 }
 
 export function findMatchingBrace(masked: string, openingIndex: number): number {
+  return findMatchingDelimiter(masked, openingIndex, "{", "}");
+}
+
+/** Match balanced `{...}` or `[...]` on a structurally masked string. */
+export function findMatchingDelimiter(
+  masked: string,
+  openingIndex: number,
+  openChar: "{" | "[",
+  closeChar: "}" | "]",
+): number {
   let depth = 0;
   for (let index = openingIndex; index < masked.length; index += 1) {
     const character = masked[index]!;
     if (isEscaped(masked, index)) continue;
-    if (character === "{") depth += 1;
-    if (character === "}") {
+    if (character === openChar) depth += 1;
+    if (character === closeChar) {
       depth -= 1;
       if (depth === 0) return index;
       if (depth < 0) return -1;
@@ -122,25 +132,84 @@ export function findMatchingBrace(masked: string, openingIndex: number): number 
   return -1;
 }
 
-function locateCommandAbstracts(source: string, masked: string): LocatedBody[] {
-  const targets: LocatedBody[] = [];
-  const pattern = /\\abstract\s*\{/g;
+export type LocatedLatexCommand = {
+  commandStart: number;
+  bodyStart: number;
+  bodyEnd: number;
+  commandEnd: number;
+  openingAnchor: string;
+  optionalArg?: string;
+  optionalArgRange?: SourceRange;
+  star: boolean;
+};
+
+/**
+ * Locate `\commandName` / `\commandName*` with zero or more optional `[...]`
+ * arguments before the mandatory `{...}` body. Uses a structural mask so
+ * comments and verbatim regions cannot produce false hits.
+ */
+export function locateLatexCommands(
+  source: string,
+  masked: string,
+  commandName: string,
+  options?: { allowStar?: boolean },
+): LocatedLatexCommand[] {
+  const allowStar = options?.allowStar ?? false;
+  const escapedName = commandName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const pattern = new RegExp(`\\\\${escapedName}(?![A-Za-z@])`, "g");
+  const results: LocatedLatexCommand[] = [];
+
   for (const match of masked.matchAll(pattern)) {
     if (match.index === undefined) continue;
-    const openingBrace = masked.indexOf("{", match.index);
-    if (openingBrace < 0) continue;
-    const closingBrace = findMatchingBrace(masked, openingBrace);
-    if (closingBrace < 0) continue;
-    targets.push({
-      syntax: "command",
+    let cursor = match.index + match[0].length;
+    while (/\s/.test(masked[cursor] ?? "")) cursor += 1;
+
+    let star = false;
+    if (allowStar && masked[cursor] === "*") {
+      star = true;
+      cursor += 1;
+      while (/\s/.test(masked[cursor] ?? "")) cursor += 1;
+    }
+
+    let optionalArg: string | undefined;
+    let optionalArgRange: SourceRange | undefined;
+    while (masked[cursor] === "[") {
+      const close = findMatchingDelimiter(masked, cursor, "[", "]");
+      if (close < 0) break;
+      optionalArg = source.slice(cursor + 1, close);
+      optionalArgRange = { start: cursor + 1, end: close };
+      cursor = close + 1;
+      while (/\s/.test(masked[cursor] ?? "")) cursor += 1;
+    }
+
+    if (masked[cursor] !== "{") continue;
+    const opening = cursor;
+    const closing = findMatchingBrace(masked, opening);
+    if (closing < 0) continue;
+
+    results.push({
       commandStart: match.index,
-      bodyStart: openingBrace + 1,
-      bodyEnd: closingBrace,
-      commandEnd: closingBrace + 1,
-      openingAnchor: source.slice(match.index, openingBrace + 1),
+      bodyStart: opening + 1,
+      bodyEnd: closing,
+      commandEnd: closing + 1,
+      openingAnchor: source.slice(match.index, opening + 1),
+      optionalArg,
+      optionalArgRange,
+      star,
     });
   }
-  return targets;
+  return results;
+}
+
+function locateCommandAbstracts(source: string, masked: string): LocatedBody[] {
+  return locateLatexCommands(source, masked, "abstract").map((command) => ({
+    syntax: "command" as const,
+    commandStart: command.commandStart,
+    bodyStart: command.bodyStart,
+    bodyEnd: command.bodyEnd,
+    commandEnd: command.commandEnd,
+    openingAnchor: command.openingAnchor,
+  }));
 }
 
 function locateEnvironmentAbstracts(source: string, masked: string): LocatedBody[] {

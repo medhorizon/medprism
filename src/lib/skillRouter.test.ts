@@ -19,6 +19,22 @@ describe("workflow router", () => {
     expect(routeWorkflow({ text }).kind).toBe(expected);
   });
 
+  it("locates named LaTeX targets from natural-language edit intents (not only 写/draft)", () => {
+    for (const [text, target] of [
+      ["帮我就以下关键词取标题：HCC，NMF，scRNA", "title"],
+      ["想一个英文标题", "title"],
+      ["propose a title for this paper", "title"],
+      ["把摘要换成更短的版本", "abstract"],
+      ["更新 Methods 部分", "methods"],
+      ["改成 Discussion 里的表述", "discussion"],
+    ] as const) {
+      const route = routeWorkflow({ text });
+      expect(route.kind).toBe("writing");
+      expect(route.plan.target?.kind).toBe(target);
+      expect(route.plan.steps).toContain("latex-apply");
+    }
+  });
+
   it("models research as an independent stage before writing and LaTeX application", () => {
     for (const [text, target] of [
       ["帮我调研 HCC 并写一个摘要", "abstract"],

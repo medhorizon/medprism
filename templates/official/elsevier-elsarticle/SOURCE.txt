@@ -1,3 +1,7 @@
 ﻿Source: CTAN elsarticle
 https://ctan.org/pkg/elsarticle
 LPPL. Vendored for MedPrism.
+
+MedPrism notes:
+- elsarticle.cls is generated via scripts/prepare-official-templates.mjs
+  (DocStrip from elsarticle.dtx). Do not copy the .dtx over the .cls.

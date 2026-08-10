@@ -10,7 +10,8 @@ export const COMPILE_LIMITS = Object.freeze({
   maxFileBytes: 2 * 1024 * 1024,
   maxTotalBytes: 24 * 1024 * 1024,
   maxLogBytes: 2 * 1024 * 1024,
-  timeoutMs: 30_000,
+  // First Springer/ACM compiles often download many packages via Tectonic.
+  timeoutMs: 120_000,
 });
 
 export class CompileServiceError extends Error {

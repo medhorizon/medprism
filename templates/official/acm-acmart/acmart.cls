@@ -2348,7 +2348,6 @@
 % main file and use the pseudo-guard |<gobble>| for it.
 %    \begin{macrocode}
 \NeedsTeXFormat{LaTeX2e}
-\ProvidesFile{acmart.dtx}
 \ProvidesClass{acmart}
 [2026/06/27 v2.19 Typesetting articles for the Association for Computing Machinery]
 %    \end{macrocode}
@@ -2481,20 +2480,6 @@
 % 
 % And the driver code:
 %    \begin{macrocode}
-\documentclass{ltxdoc}
-\usepackage{array,booktabs,amsmath,graphicx,fancyvrb,tabularx, longtable}
-\usepackage[tt=false, type1=true]{libertine}
-\usepackage[varqu]{zi4}
-\usepackage[libertine]{newtxmath}
-\usepackage[tableposition=top]{caption}
-\usepackage{hypdoc}
-\PageIndex
-\CodelineIndex
-\RecordChanges
-\EnableCrossrefs
-\begin{document}
-  \DocInput{acmart.dtx}
-\end{document}
 \def\@classname{acmart}
 %    \end{macrocode}
 %

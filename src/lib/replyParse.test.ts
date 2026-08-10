@@ -114,6 +114,27 @@ describe("assistant reply parsing", () => {
     expect(withCompilePolicy.ok).toBe(false);
   });
 
+  it("treats empty patchProposal.operations as advice-only instead of rejecting", () => {
+    const parsed = parseModelWorkflowEnvelope(JSON.stringify({
+      schemaVersion: "1",
+      workflow: "writing",
+      summary: "Title options",
+      warnings: [],
+      content: "Candidate A; Candidate B.",
+      patchProposal: {
+        schemaVersion: "1",
+        summary: "no edit",
+        operations: [],
+      },
+    }), "writing");
+
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.envelope.proposal).toBeUndefined();
+    expect(parsed.envelope.content).toBe("Candidate A; Candidate B.");
+    expect(parsed.envelope.warnings.some((item) => /empty patchProposal/i.test(item))).toBe(true);
+  });
+
   it("treats null optional payloads as omitted instead of leaking raw JSON", () => {
     const parsed = parseModelWorkflowEnvelope(JSON.stringify({
       schemaVersion: "1",

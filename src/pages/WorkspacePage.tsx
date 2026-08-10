@@ -77,9 +77,16 @@ export function WorkspacePage() {
   const [filesWidth, setFilesWidth] = useState(220);
   const [previewWidth, setPreviewWidth] = useState(420);
   const [compiling, setCompiling] = useState(false);
+  const compilingRef = useRef(false);
   const [compiled, setCompiled] = useState(false);
   const [compileFailed, setCompileFailed] = useState(false);
-  const [previewZoom, setPreviewZoom] = useState(100);
+  const [autoCompile, setAutoCompile] = useState(() => {
+    try {
+      return localStorage.getItem("medprism.autoCompile") === "1";
+    } catch {
+      return false;
+    }
+  });
   const [toast, setToast] = useState<string | null>(null);
   const [providerOpen, setProviderOpen] = useState(false);
   const [sending, setSending] = useState(false);
@@ -89,6 +96,8 @@ export function WorkspacePage() {
   const pdfUrlRef = useRef<string | null>(null);
   const compileControllerRef = useRef<AbortController | null>(null);
   const compileRunRef = useRef(0);
+  const autoCompileRef = useRef(autoCompile);
+  const autoCompileTimerRef = useRef<number | null>(null);
   const storeRef = useRef<ProjectStore | null>(null);
   const saveQueueRef = useRef<ProjectSaveQueue | null>(null);
   const mountedRef = useRef(true);
@@ -206,9 +215,26 @@ export function WorkspacePage() {
       mountedRef.current = false;
       compileRunRef.current += 1;
       compileControllerRef.current?.abort();
+      if (autoCompileTimerRef.current != null) {
+        window.clearTimeout(autoCompileTimerRef.current);
+        autoCompileTimerRef.current = null;
+      }
       if (pdfUrlRef.current) URL.revokeObjectURL(pdfUrlRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    autoCompileRef.current = autoCompile;
+    try {
+      localStorage.setItem("medprism.autoCompile", autoCompile ? "1" : "0");
+    } catch {
+      // ignore quota / private mode
+    }
+    if (!autoCompile && autoCompileTimerRef.current != null) {
+      window.clearTimeout(autoCompileTimerRef.current);
+      autoCompileTimerRef.current = null;
+    }
+  }, [autoCompile]);
 
   const fileEntries = useMemo(
     () => (project ? filesToFileList(project.files, project.fileOrder) : []),
@@ -253,6 +279,7 @@ export function WorkspacePage() {
     compileRunRef.current = runId;
     compileControllerRef.current?.abort();
     compileControllerRef.current = controller;
+    compilingRef.current = true;
     setCompiling(true);
     setCompiled(false);
     setCompileFailed(false);
@@ -269,6 +296,7 @@ export function WorkspacePage() {
     if (compileRunRef.current !== runId) return false;
     compileControllerRef.current = null;
     setLastCompileLog(result.log || result.error || "");
+    compilingRef.current = false;
     setCompiling(false);
 
     const latest = projectRef.current;
@@ -291,22 +319,53 @@ export function WorkspacePage() {
     flash(
       result.code === "SERVICE_UNAVAILABLE"
         ? t("workspace.toastCompileOffline")
-        : t("workspace.toastCompileFailed"),
+        : result.code === "ENGINE_UNAVAILABLE"
+          ? t("workspace.toastCompileEngineMissing")
+          : t("workspace.toastCompileFailed"),
     );
     return false;
   }
 
   async function compile() {
-    if (!projectRef.current || compiling) return;
+    if (!projectRef.current || compilingRef.current) return;
+    if (autoCompileTimerRef.current != null) {
+      window.clearTimeout(autoCompileTimerRef.current);
+      autoCompileTimerRef.current = null;
+    }
     await saveQueueRef.current?.flush();
     const latest = projectRef.current;
     if (latest) await compileSnapshot(latest);
+  }
+
+  function scheduleAutoCompile() {
+    if (!autoCompileRef.current) return;
+    if (autoCompileTimerRef.current != null) {
+      window.clearTimeout(autoCompileTimerRef.current);
+    }
+    autoCompileTimerRef.current = window.setTimeout(() => {
+      autoCompileTimerRef.current = null;
+      if (!autoCompileRef.current || !mountedRef.current) return;
+      void compile();
+    }, 1800);
+  }
+
+  function toggleAutoCompile() {
+    setAutoCompile((value) => {
+      const next = !value;
+      flash(next ? t("topbar.autoCompileOn") : t("topbar.autoCompileOff"));
+      return next;
+    });
   }
 
   function cancelCompile() {
     compileRunRef.current += 1;
     compileControllerRef.current?.abort();
     compileControllerRef.current = null;
+    if (autoCompileTimerRef.current != null) {
+      window.clearTimeout(autoCompileTimerRef.current);
+      autoCompileTimerRef.current = null;
+    }
+    compilingRef.current = false;
     setCompiling(false);
     setCompiled(false);
     flash("编译已取消。");
@@ -469,9 +528,11 @@ export function WorkspacePage() {
       );
       setCompiled(false);
       flash(t("workspace.toastKept"));
-      if (result.verifyCompile) {
+      if (autoCompileRef.current && result.verifyCompile) {
         flash(t("workspace.toastRecompiling"));
         await compileSnapshot(result.project);
+      } else if (autoCompileRef.current) {
+        scheduleAutoCompile();
       }
     } catch (error) {
       flash(error instanceof Error ? error.message : String(error));
@@ -522,6 +583,7 @@ export function WorkspacePage() {
     });
     saveQueueRef.current?.schedule();
     setCompiled(false);
+    scheduleAutoCompile();
   }
 
   function exportProject() {
@@ -562,10 +624,12 @@ export function WorkspacePage() {
         compiling={compiling}
         compiled={compiled && !compileFailed}
         aiOpen={aiOpen}
+        autoCompile={autoCompile}
         onToggleAssistant={() => setAiOpen((value) => !value)}
         onExport={exportProject}
         onCompile={() => void compile()}
         onCancelCompile={cancelCompile}
+        onToggleAutoCompile={toggleAutoCompile}
         onProjectClick={() => navigate("/projects")}
         onApiSettings={() => setProviderOpen(true)}
       />
@@ -635,8 +699,6 @@ export function WorkspacePage() {
           }
         />
         <PreviewPane
-          zoom={previewZoom}
-          onZoomChange={setPreviewZoom}
           compiling={compiling}
           compiled={compiled}
           onCompile={() => void compile()}

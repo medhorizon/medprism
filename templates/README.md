@@ -23,7 +23,8 @@ templates/official/<template-id>/
 
 - Catalog：`src/templates/catalog.ts`
 - 加载：`src/templates/loadBundled.ts`（`import.meta.glob` → 官方文件夹）
-- 预处理：`node scripts/prepare-official-templates.mjs`（生成 `elsarticle.cls` / `acmart.cls` / ACM samples）
+- 预处理：`node scripts/prepare-official-templates.mjs`（DocStrip 生成 `elsarticle.cls` / `acmart.cls` / ACM samples；勿把 `.dtx` 直接当 `.cls`）
+- 冒烟：`python scripts/check-templates-compile.py`（对 catalog 主文件跑 Tectonic）
 
 ## 更新官方包
 

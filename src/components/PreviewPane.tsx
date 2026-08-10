@@ -2,8 +2,6 @@ import { useMemo } from "react";
 import { useI18n } from "../i18n/context";
 
 type PreviewPaneProps = {
-  zoom: number;
-  onZoomChange: (zoom: number) => void;
   compiling: boolean;
   compiled: boolean;
   onCompile: () => void;
@@ -16,8 +14,6 @@ type PreviewPaneProps = {
 };
 
 export function PreviewPane({
-  zoom,
-  onZoomChange,
   compiling,
   compiled,
   onCompile,
@@ -91,34 +87,11 @@ export function PreviewPane({
     [title, authors],
   );
 
-  const pageW = (420 * zoom) / 100;
-  const pageH = (594 * zoom) / 100;
+  const pageW = 420;
+  const pageH = 594;
 
   return (
     <section className="panel panel-preview">
-      <div className="preview-toolbar">
-        <span className="panel-head preview-label">{t("preview.title")}</span>
-        <div className="topbar-spacer" />
-        <span className="status-pill">
-          {pdfUrl ? t("preview.pdfReady") : t("preview.htmlFallback")}
-        </span>
-        <button
-          className="btn btn-ghost"
-          type="button"
-          onClick={() => onZoomChange(Math.max(70, zoom - 10))}
-        >
-          −
-        </button>
-        <span className="status-pill">{zoom}%</span>
-        <button
-          className="btn btn-ghost"
-          type="button"
-          onClick={() => onZoomChange(Math.min(140, zoom + 10))}
-        >
-          +
-        </button>
-      </div>
-
       {!compiled && !compiling && (
         <div className="compile-banner">
           <p>

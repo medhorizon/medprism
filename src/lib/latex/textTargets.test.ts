@@ -139,4 +139,108 @@ describe("general LaTeX text targets", () => {
     });
     expect(resolved.ok).toBe(false);
   });
+
+  it("replaces Springer \\title[short]{long} instead of inserting a preamble duplicate", async () => {
+    const source = [
+      "\\documentclass[pdflatex,sn-mathphys-num]{sn-jnl}",
+      "\\begin{document}",
+      "\\title[Article Title]{Article Title}",
+      "\\author{First Author}",
+      "\\maketitle",
+      "\\end{document}",
+    ].join("\n");
+    const result = await applyTarget(
+      source,
+      { kind: "title", createIfMissing: true },
+      "Early Screening of HCC Using NMF and scRNA-seq",
+    );
+    expect(result).toContain(
+      "\\title[Early Screening of HCC Using NMF and scRNA-seq]{Early Screening of HCC Using NMF and scRNA-seq}",
+    );
+    expect(result).not.toMatch(/\\title\{[^}]+\}\s*\\begin\{document\}/);
+    expect(result.match(/\\title\b/g)?.length).toBe(1);
+    expect(result).not.toContain("{Article Title}");
+  });
+
+  it("replaces \\section[short]{Discussion} body through the shared section locator", async () => {
+    const source = [
+      "\\documentclass{article}",
+      "\\begin{document}",
+      "\\section[Disc.]{Discussion}",
+      "Old discussion.",
+      "\\section{Conclusion}",
+      "Conclusion body.",
+      "\\end{document}",
+    ].join("\n");
+    const result = await applyTarget(
+      source,
+      { kind: "discussion", createIfMissing: true },
+      "Revised discussion prose.",
+    );
+    expect(result).toContain("\\section[Disc.]{Discussion}");
+    expect(result).toContain("Revised discussion prose.");
+    expect(result).not.toContain("Old discussion.");
+  });
+
+  it("creates a missing title after \\begin{document} before \\author for journal templates", async () => {
+    const source = [
+      "\\documentclass[pdflatex,sn-mathphys-num]{sn-jnl}",
+      "\\begin{document}",
+      "\\author{First Author}",
+      "\\maketitle",
+      "\\end{document}",
+    ].join("\n");
+    const result = await applyTarget(
+      source,
+      { kind: "title", createIfMissing: true },
+      "A New Journal Title",
+    );
+    expect(result.indexOf("\\begin{document}")).toBeLessThan(result.indexOf("\\title{A New Journal Title}"));
+    expect(result.indexOf("\\title{A New Journal Title}")).toBeLessThan(result.indexOf("\\author{First Author}"));
+  });
+
+  it("prefers the in-document title when a stale preamble title also exists", async () => {
+    const source = [
+      "\\documentclass[pdflatex,sn-mathphys-num]{sn-jnl}",
+      "\\title{Stale preamble title}",
+      "\\begin{document}",
+      "\\title[Article Title]{Article Title}",
+      "\\author{First Author}",
+      "\\maketitle",
+      "\\end{document}",
+    ].join("\n");
+    const result = await applyTarget(
+      source,
+      { kind: "title", createIfMissing: true },
+      "Canonical In-Document Title",
+    );
+    expect(result).toContain("\\title{Stale preamble title}");
+    expect(result).toContain(
+      "\\title[Canonical In-Document Title]{Canonical In-Document Title}",
+    );
+    expect(result).not.toContain("{Article Title}");
+  });
+
+  it("creates missing keywords before \\maketitle, not before abstract", async () => {
+    const source = [
+      "\\documentclass[pdflatex,sn-mathphys-num]{sn-jnl}",
+      "\\begin{document}",
+      "\\title{T}",
+      "\\abstract{Abstract body.}",
+      "\\maketitle",
+      "\\end{document}",
+    ].join("\n");
+    const result = await applyTarget(
+      source,
+      { kind: "keywords", createIfMissing: true },
+      "HCC, NMF, scRNA-seq",
+    );
+    expect(result).toContain("\\keywords{HCC, NMF, scRNA-seq}");
+    expect(result.indexOf("\\abstract{Abstract body.}")).toBeLessThan(
+      result.indexOf("\\keywords{HCC, NMF, scRNA-seq}"),
+    );
+    expect(result.indexOf("\\keywords{HCC, NMF, scRNA-seq}")).toBeLessThan(
+      result.indexOf("\\maketitle"),
+    );
+  });
 });

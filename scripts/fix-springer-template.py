@@ -1,4 +1,48 @@
-%% MedPrism starter for Springer Nature sn-jnl
+"""Make Springer Nature sn-jnl template compile under Tectonic/XeTeX."""
+from __future__ import annotations
+
+import re
+import shutil
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+TDIR = ROOT / "templates" / "official" / "springer-nature-sn-jnl"
+SRC = TDIR / "sn-article.tex"
+OFFICIAL = TDIR / "sn-article.official-sample.tex"
+
+
+def patch_official_sample(text: str) -> str:
+    text = text.replace(
+        r"\verb+\begin{verbatim}+",
+        r"\texttt{\string\begin\{verbatim\}}",
+    )
+    text = text.replace(
+        r"\verb+\end{verbatim}+",
+        r"\texttt{\string\end\{verbatim\}}",
+    )
+    # Keep [pdflatex,...]: sn-jnl loads breakurl when @pdflatex is false,
+    # and breakurl's \headerps@out crashes under Tectonic/XeTeX.
+    # Heavy mathescape listings often break under XeTeX; keep a simple equation.
+    replacement = (
+        "% [MedPrism] Sample lstlisting omitted for Tectonic/XeTeX compatibility.\n"
+        r"\begin{equation}"
+        "\n"
+        r"|\psi\rangle = \sum_i c_i |\phi_i\rangle"
+        "\n"
+        r"\end{equation}"
+    )
+    text, n = re.subn(
+        r"\\begin\{lstlisting\}.*?\\end\{lstlisting\}",
+        lambda _m: replacement,
+        text,
+        count=1,
+        flags=re.S,
+    )
+    print(f"lstlisting replacements: {n}")
+    return text
+
+
+STARTER = r"""%% MedPrism starter for Springer Nature sn-jnl
 %% Based on the official Springer Nature LaTeX template (sn-jnl).
 %% Official full sample (with tables/figures demos) is kept as:
 %%   sn-article.official-sample.tex
@@ -99,3 +143,20 @@ Acknowledgements are not compulsory. Where included they should be brief.
 \bibliography{sn-bibliography}
 
 \end{document}
+"""
+
+
+def main() -> None:
+    # Prefer an existing official-sample backup; else patch current sn-article.tex.
+    source = OFFICIAL if OFFICIAL.exists() and OFFICIAL.stat().st_size > 10_000 else SRC
+    raw = source.read_bytes()
+    raw = raw.replace(bytes([0x93]), b"'").replace(bytes([0x94]), b"'")
+    official = patch_official_sample(raw.decode("utf-8"))
+    OFFICIAL.write_text(official, encoding="utf-8", newline="\n")
+    SRC.write_text(STARTER, encoding="utf-8", newline="\n")
+    print(f"wrote starter -> {SRC}")
+    print(f"wrote official sample -> {OFFICIAL} (from {source.name})")
+
+
+if __name__ == "__main__":
+    main()

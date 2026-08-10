@@ -37,6 +37,12 @@ export function evalGuard(expr, opts) {
   return parseOr();
 }
 
+/**
+ * DocStrip guard syntax (asterisk inside brackets):
+ *   %<*foo> ... %</foo>     block include when foo is selected
+ *   %<foo>code              single-line include
+ *   %<<name ... %name       verbatim (strip one leading %)
+ */
 export function docstrip(src, optionList) {
   const opts = new Set(optionList);
   const lines = src.split(/\r?\n/);
@@ -56,24 +62,28 @@ export function docstrip(src, optionList) {
       continue;
     }
 
-    const mStart = line.match(/^%\*<([^>]+)>/);
+    // Block start: %<*expr>
+    const mStart = line.match(/^%<\*([^>]+)>/);
     if (mStart) {
       const ok = evalGuard(mStart[1], opts);
       stack.push(include);
       include = include && ok;
       continue;
     }
+    // Block end: %</expr>
     const mEnd = line.match(/^%<\/([^>]+)>/);
     if (mEnd) {
       include = stack.length ? stack.pop() : true;
       continue;
     }
+    // Verbatim: %<<name
     const mVerb = line.match(/^%<<([A-Za-z0-9_-]+)/);
     if (mVerb) {
       if (include) verbatimEnd = mVerb[1];
       continue;
     }
-    const mLine = line.match(/^%<([^>]+)>(.*)$/);
+    // Single-line: %<expr>rest  (must not match %<* or %</)
+    const mLine = line.match(/^%<([^*>][^>]*)>(.*)$/);
     if (mLine) {
       if (include && evalGuard(mLine[1], opts)) out.push(mLine[2]);
       continue;
@@ -85,7 +95,6 @@ export function docstrip(src, optionList) {
     }
     // Guard-only meta lines
     if (/^%(\s|$)/.test(line) || line.startsWith("% ")) {
-      // Keep as TeX comment when it looks like documentation inside a module
       if (line.startsWith("% ")) out.push("%" + line.slice(1));
       else if (line === "%") out.push("%");
       continue;

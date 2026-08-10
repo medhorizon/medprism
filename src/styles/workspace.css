@@ -14,7 +14,9 @@
   padding: 0 12px;
   border-bottom: 1px solid var(--hairline);
   background: var(--canvas);
-  z-index: 2;
+  /* Keep flyouts above the workspace; allow them to paint outside the 48px row. */
+  z-index: 30;
+  overflow: visible;
 }
 
 .brand {
@@ -77,6 +79,32 @@
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+.compile-control {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  z-index: 31;
+}
+
+.compile-control.is-open {
+  z-index: 32;
+}
+
+.compile-flyout {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  white-space: nowrap;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.12);
+  z-index: 33;
+}
+
+.compile-flyout[aria-pressed="true"] {
+  outline: 2px solid var(--canvas);
+  outline-offset: -2px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35), 0 8px 20px rgba(0, 0, 0, 0.12);
 }
 
 .btn {
@@ -515,22 +543,6 @@
 }
 
 /* ——— Preview ——— */
-.preview-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  height: 36px;
-  padding: 0 8px;
-  border-bottom: 1px solid var(--hairline);
-  flex: none;
-}
-
-.preview-label {
-  border: none;
-  padding-left: 4px;
-  height: auto;
-}
-
 .preview-stage {
   flex: 1;
   min-height: 0;

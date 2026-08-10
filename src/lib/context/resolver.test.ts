@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildContextSnapshot } from "./snapshot";
-import { resolveTaskContext } from "./resolver";
+import { resolveCitationClaims, resolveTaskContext } from "./resolver";
 import { buildManuscriptModel } from "../manuscript/model";
 import { segmentUserMessage } from "../task/segments";
 
@@ -53,5 +53,35 @@ describe("semantic Context Resolver", () => {
       },
     });
     expect(resolved.targets[0]?.providedText).toBe(userText);
+  });
+
+  it("splits an unselected target section into runtime-owned claim ranges", async () => {
+    const source = "\\documentclass{article}\n\\begin{document}\n\\section{Discussion}\nFirst claim needs evidence. Second claim also needs support.\n\\end{document}";
+    const snapshot = await buildContextSnapshot({ projectId: "p", files: { "main.tex": source }, mainFile: "main.tex" });
+    const model = buildManuscriptModel(snapshot);
+    const resolved = resolveTaskContext({
+      snapshot,
+      model,
+      interpreted: {
+        spec: {
+          schemaVersion: "1",
+          action: "cite",
+          applyMode: "propose-patch",
+          contentMode: "none",
+          scope: "targets",
+          evidenceMode: "literature",
+          targets: [{ slot: "discussion", messageSegmentIds: [] }],
+        },
+        segments: [],
+        source: "llm",
+        repaired: false,
+      },
+    });
+    const claims = resolveCitationClaims(resolved);
+    expect(claims.map((claim) => claim.text)).toEqual([
+      "First claim needs evidence.",
+      "Second claim also needs support.",
+    ]);
+    expect(source.slice(claims[0]!.range.start, claims[0]!.range.end)).toBe(claims[0]!.text);
   });
 });

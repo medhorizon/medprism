@@ -1,4 +1,5 @@
 import type { ContextSnapshot, TextSelection } from "./snapshot";
+import { structuralMask } from "../latex/targets";
 import {
   canonicalOccurrence,
   occurrencesForSlot,
@@ -37,6 +38,17 @@ export type ResolvedTask = {
   warnings: string[];
   errors: string[];
   toolNotes: string[];
+};
+
+export type ResolvedClaimCandidate = {
+  id: string;
+  containerId: string;
+  path: string;
+  heading: string;
+  range: TextSelection;
+  containerRange: TextSelection;
+  text: string;
+  hasCitation: boolean;
 };
 
 function targetRef(target: TaskSpec["targets"][number]): ManuscriptSlotRef {
@@ -176,4 +188,103 @@ export function resolveTaskContext(args: {
       `context-selection:${selection ? "yes" : "no"}`,
     ],
   };
+}
+
+function claimId(path: string, start: number, end: number): string {
+  return `claim:${encodeURIComponent(path)}:${start}:${end}`;
+}
+
+function sentenceRanges(
+  masked: string,
+  containerRange: TextSelection,
+): TextSelection[] {
+  const ranges: TextSelection[] = [];
+  let start = containerRange.start;
+  const push = (rawEnd: number) => {
+    let sentenceStart = start;
+    let sentenceEnd = rawEnd;
+    while (sentenceStart < sentenceEnd && /\s/.test(masked[sentenceStart] ?? "")) {
+      sentenceStart += 1;
+    }
+    while (sentenceEnd > sentenceStart && /\s/.test(masked[sentenceEnd - 1] ?? "")) {
+      sentenceEnd -= 1;
+    }
+    start = rawEnd;
+    if (sentenceEnd <= sentenceStart) return;
+    const visible = masked
+      .slice(sentenceStart, sentenceEnd)
+      .replace(/\\cite\w*\s*\{[^}]*\}/gi, " ")
+      .replace(/\\[A-Za-z@]+\*?(?:\s*\[[^\]]*\])?/g, " ")
+      .replace(/[{}$&%#_^~]/g, " ");
+    if ((visible.match(/[\p{L}\p{N}]/gu) ?? []).length < 12) return;
+    ranges.push({ start: sentenceStart, end: sentenceEnd });
+  };
+
+  for (let index = containerRange.start; index < containerRange.end; index += 1) {
+    const character = masked[index] ?? "";
+    const next = masked[index + 1] ?? "";
+    const previous = masked[index - 1] ?? "";
+    const decimalPoint = character === "." && /\d/.test(previous) && /\d/.test(next);
+    const terminal = /[.!?。！？]/u.test(character) && !decimalPoint;
+    const paragraphEnd = (character === "\n" || character === "\r") &&
+      /^\s*(?:\r?\n|$)/.test(masked.slice(index + 1, containerRange.end));
+    if (terminal || paragraphEnd) push(index + 1);
+  }
+  if (start < containerRange.end) push(containerRange.end);
+  return ranges;
+}
+
+/**
+ * Split only runtime-resolved selection/section ranges into stable claim IDs.
+ * The model can select these IDs but never owns their physical locations.
+ */
+export function resolveCitationClaims(resolved: ResolvedTask): ResolvedClaimCandidate[] {
+  const containers: Array<{
+    id: string;
+    path: string;
+    heading: string;
+    range: TextSelection;
+  }> = [];
+  if (resolved.selection) {
+    containers.push({
+      id: "selection",
+      path: resolved.selection.path,
+      heading: "Selection",
+      range: resolved.selection.range,
+    });
+  } else {
+    const seen = new Set<string>();
+    for (const target of resolved.targets) {
+      const occurrence = target.occurrence;
+      if (!occurrence || seen.has(occurrence.id)) continue;
+      seen.add(occurrence.id);
+      containers.push({
+        id: occurrence.id,
+        path: occurrence.path,
+        heading: occurrence.heading,
+        range: occurrence.bodyRange,
+      });
+    }
+  }
+
+  const claims: ResolvedClaimCandidate[] = [];
+  for (const container of containers) {
+    const source = resolved.model.files[container.path];
+    if (source === undefined) continue;
+    const masked = structuralMask(source);
+    for (const range of sentenceRanges(masked, container.range)) {
+      const text = source.slice(range.start, range.end);
+      claims.push({
+        id: claimId(container.path, range.start, range.end),
+        containerId: container.id,
+        path: container.path,
+        heading: container.heading,
+        range,
+        containerRange: container.range,
+        text,
+        hasCitation: /\\cite\w*\s*\{[^}]+\}/i.test(text),
+      });
+    }
+  }
+  return claims;
 }

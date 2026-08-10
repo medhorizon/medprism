@@ -34,6 +34,9 @@ export type RuntimeRequest = {
   workflow?: "auto" | WorkflowKind;
   /** Deprecated compatibility input; mapped to a WorkflowKind by the router. */
   intent?: "auto" | SkillIntent | "general";
+  /** Incremental text callback for the active project chat session. */
+  onDelta?: (delta: string) => void;
+  signal?: AbortSignal;
 };
 
 export type RuntimeResult = {
@@ -99,6 +102,8 @@ export async function runAssistant(req: RuntimeRequest): Promise<RuntimeResult> 
     config: req.config,
     history: req.history,
     ctx: req.ctx,
+    ...(req.onDelta ? { onDelta: req.onDelta } : {}),
+    ...(req.signal ? { signal: req.signal } : {}),
   });
 
   const suggestions: ChatSuggestion[] = [];

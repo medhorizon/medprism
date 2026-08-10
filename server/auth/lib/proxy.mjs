@@ -1,3 +1,4 @@
+import { Readable } from "node:stream";
 import { env } from "./env.mjs";
 import { sendJson } from "./http.mjs";
 
@@ -11,6 +12,9 @@ function joinChatUrl(baseUrl) {
  * Forward OpenAI-compatible chat completions.
  * Prefer explicit UPSTREAM_*; otherwise use the signed-in user's NewAPI key
  * against NEWAPI_PUBLIC_BASE_URL (so production need not set a global upstream key).
+ *
+ * When the client requests `stream: true`, the upstream SSE body is piped through
+ * unchanged so the desktop UI can render tokens incrementally.
  */
 export async function proxyChatCompletions(req, res, body, userApiKey = "") {
   let baseUrl = env.upstreamBaseUrl;
@@ -32,6 +36,7 @@ export async function proxyChatCompletions(req, res, body, userApiKey = "") {
     return;
   }
 
+  const wantStream = body?.stream === true;
   const url = joinChatUrl(baseUrl);
   let upstream;
   try {
@@ -43,7 +48,7 @@ export async function proxyChatCompletions(req, res, body, userApiKey = "") {
       },
       body: JSON.stringify({
         ...body,
-        stream: false,
+        stream: wantStream,
       }),
     });
   } catch (e) {
@@ -57,11 +62,27 @@ export async function proxyChatCompletions(req, res, body, userApiKey = "") {
     return;
   }
 
-  const text = await upstream.text();
   res.statusCode = upstream.status;
-  res.setHeader(
-    "Content-Type",
-    upstream.headers.get("content-type") || "application/json; charset=utf-8",
-  );
+  const contentType =
+    upstream.headers.get("content-type") ||
+    (wantStream ? "text/event-stream; charset=utf-8" : "application/json; charset=utf-8");
+  res.setHeader("Content-Type", contentType);
+
+  if (wantStream && upstream.body) {
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    try {
+      const nodeStream = Readable.fromWeb(upstream.body);
+      nodeStream.on("error", () => {
+        if (!res.writableEnded) res.end();
+      });
+      nodeStream.pipe(res);
+      return;
+    } catch {
+      // Fall through to buffered copy if fromWeb is unavailable.
+    }
+  }
+
+  const text = await upstream.text();
   res.end(text);
 }

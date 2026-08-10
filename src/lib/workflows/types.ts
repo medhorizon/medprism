@@ -139,6 +139,9 @@ export type ModelCompletionRequest = {
   config: LlmConfig;
   messages: ChatRequestMessage[];
   signal?: AbortSignal;
+  /** Stream text completions unless a structured caller explicitly disables it. */
+  stream?: boolean;
+  onDelta?: (delta: string) => void;
 };
 
 export type WorkflowServices = {
@@ -156,6 +159,8 @@ export type WorkflowExecutionInput = {
   history: ChatRequestMessage[];
   ctx: ToolContext;
   services: WorkflowServices;
+  onDelta?: (delta: string) => void;
+  signal?: AbortSignal;
   /** Trusted output from the optional independent research stage. */
   research?: ResearchBundle;
 };

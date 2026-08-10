@@ -161,6 +161,7 @@ export async function startProjectAssistant(
   const stillThisRun = () => ensure(projectId).runId === runId;
 
   try {
+    let streamed = "";
     const result = await runAssistant({
       mode: "assistant",
       config: request.config,
@@ -168,6 +169,17 @@ export async function startProjectAssistant(
       history: request.history,
       workflow: request.workflow,
       ctx: request.ctx,
+      onDelta: (delta) => {
+        if (!stillThisRun()) return;
+        streamed += delta;
+        const current = ensure(projectId);
+        current.messages = current.messages.map((message) =>
+          message.id === thinkingId
+            ? { ...message, content: streamed, pending: true }
+            : message,
+        );
+        emit();
+      },
     });
 
     if (!stillThisRun()) return false;

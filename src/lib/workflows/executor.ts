@@ -29,10 +29,23 @@ const HANDLERS: Record<WorkflowKind, WorkflowHandler> = {
   review: runReviewWorkflow,
 };
 
-const DEFAULT_SERVICES: WorkflowServices = {
-  complete: chatCompletions,
-  runTool,
-};
+function buildServices(
+  onDelta?: (delta: string) => void,
+  signal?: AbortSignal,
+): WorkflowServices {
+  return {
+    complete: (request) =>
+      chatCompletions({
+        ...request,
+        stream: request.stream !== false,
+        signal: request.signal ?? signal,
+        ...(request.onDelta || onDelta
+          ? { onDelta: request.onDelta ?? onDelta }
+          : {}),
+      }),
+    runTool,
+  };
+}
 
 function rejectedResult(
   kind: WorkflowKind,
@@ -131,7 +144,7 @@ export function validateWorkflowResult(
  */
 export async function executeWorkflow(
   input: ExecuteWorkflowInput,
-  services: WorkflowServices = DEFAULT_SERVICES,
+  services: WorkflowServices = buildServices(input.onDelta, input.signal),
 ): Promise<WorkflowResult> {
   const plan = normalizedPlan(input);
   const request = { ...input.request, kind: plan.primary, plan };

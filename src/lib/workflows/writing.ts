@@ -13,6 +13,10 @@ import { compactPaperHits, validateResearchUse } from "../research/service";
 import { parseModelWorkflowEnvelope } from "../replyParse";
 import { buildScaffoldFromUserText } from "../latex/scaffold";
 import {
+  buildSectionFillFromUserText,
+  isProvidedSectionFillRequest,
+} from "../latex/sectionFill";
+import {
   detectWritingDomain,
   isNatureWritingRequest,
   isStructuralScaffoldRequest,
@@ -127,6 +131,52 @@ export const runWritingWorkflow: WorkflowHandler = async (input) => {
       toolNotes: [
         `workflow:${kind}:scaffold:${scaffold.added.length}`,
         `scaffold:source:${scaffold.parseSource}`,
+        `skill:${skill.id}`,
+      ],
+    };
+  }
+
+  // User pasted ≥2 labeled section bodies — apply via runtime targets, never model oldText.
+  if (
+    (kind === "writing" || kind === "polish" || kind === "latex") &&
+    isProvidedSectionFillRequest(input.request.userText)
+  ) {
+    const fill = await buildSectionFillFromUserText(
+      snapshot,
+      input.request.userText,
+    );
+    if (!fill.ok) {
+      return {
+        agent: emptyAgentResult(kind, "Provided section fill", [fill.message]),
+        content: fill.message,
+        toolNotes: [`workflow:${kind}:section-fill:none`, `skill:${skill.id}`],
+      };
+    }
+    const finalized = await finalizePatchSet(snapshot, fill.patchSet);
+    if (!finalized.ok) {
+      return invalidModelResult(kind, finalized.error.message);
+    }
+    const skippedNote =
+      fill.skipped.length > 0
+        ? `已跳过：${fill.skipped.join("、")}。`
+        : "";
+    return {
+      agent: {
+        schemaVersion: "1",
+        workflow: kind,
+        summary: fill.patchSet.summary,
+        warnings: fill.skipped.length ? [skippedNote] : [],
+        patch: finalized.patchSet,
+      },
+      content: [
+        `已由运行时按你提供的正文写入 ${fill.applied.length} 个模块（${fill.applied.join("、")}）。`,
+        "请查看 Diff 后选择 Keep。",
+        skippedNote,
+      ]
+        .filter(Boolean)
+        .join(" "),
+      toolNotes: [
+        `workflow:${kind}:section-fill:${fill.applied.length}`,
         `skill:${skill.id}`,
       ],
     };

@@ -87,9 +87,10 @@ function extractInsertBlock(
 
 /**
  * Collapse inserts that share path+anchor into one replace_text, all against the
- * original file hashes/ranges. Apply later ranges first so earlier offsets stay valid.
+ * original file hashes/ranges. Keep pure replacements as-is. Sort later ranges
+ * first so earlier offsets stay valid when applying concurrently.
  */
-async function assembleScaffoldOperations(
+export async function assembleConcurrentReplaceOps(
   steps: ReplaceTextOperation[],
   originalFiles: Record<string, string>,
 ): Promise<ReplaceTextOperation[]> {
@@ -121,9 +122,7 @@ async function assembleScaffoldOperations(
   }
 
   const assembled: ReplaceTextOperation[] = [];
-  for (const group of [...groups.values()].sort(
-    (a, b) => b.range.start - a.range.start,
-  )) {
+  for (const group of [...groups.values()]) {
     const source = originalFiles[group.path] ?? "";
     const combined = group.blocks.join("");
     const newText =
@@ -140,7 +139,19 @@ async function assembleScaffoldOperations(
       range: group.range,
     });
   }
-  return assembled;
+
+  // Pure body replacements (or inserts that could not be grouped) keep original ops.
+  for (const op of steps) {
+    const extracted = extractInsertBlock(op);
+    if (!extracted || !op.range) {
+      assembled.push(op);
+      continue;
+    }
+    const key = `${op.path}\0${extracted.mode}\0${op.oldText}\0${op.range.start}`;
+    if (!groups.has(key)) assembled.push(op);
+  }
+
+  return assembled.sort((a, b) => (b.range?.start ?? 0) - (a.range?.start ?? 0));
 }
 
 /**
@@ -208,7 +219,7 @@ export async function buildStructuralScaffoldPatch(
     };
   }
 
-  const operations = await assembleScaffoldOperations(stepOps, snapshot.files);
+  const operations = await assembleConcurrentReplaceOps(stepOps, snapshot.files);
   const patchSet: PatchSet = {
     schemaVersion: "1",
     id: crypto.randomUUID(),

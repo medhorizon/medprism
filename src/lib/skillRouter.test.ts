@@ -133,6 +133,21 @@ describe("workflow router", () => {
     expect(route.plan.target).toBeUndefined();
   });
 
+  it("does not collapse multi-section fill requests onto the first heading", () => {
+    const route = routeWorkflow({
+      text: [
+        "帮我补充：",
+        "Author contributions Y.L performed experiments.",
+        "Funding This work was supported by NSFC.",
+        "Data availability All data are included.",
+      ].join("\n"),
+      explicitWorkflow: "writing",
+    });
+    expect(route.kind).toBe("writing");
+    expect(route.plan.target).toBeUndefined();
+    expect(route.plan.applyToLatex).toBe(true);
+  });
+
   it("runtime scaffold guard overrides a misclassified advice route", () => {
     const text = "我想发discover oncology，请检查结构上还有那些并补充，内容留空";
     expect(routeWorkflow({ text }).needsLlmClassification).toBe(true);

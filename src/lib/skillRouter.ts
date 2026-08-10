@@ -182,6 +182,7 @@ export function detectLatexTarget(text: string): LatexTargetSpec | undefined {
   const knownMatches = TARGET_PATTERNS.filter((candidate) => candidate.pattern.test(text));
   const uniqueKinds = new Set(knownMatches.map((match) => match.target.kind));
   // Long requirement lists without an explicit single-section verb are multi-target.
+  // Provided multi-section pastes are applied by runtime section-fill, not this target.
   if (uniqueKinds.size >= 3) return undefined;
   const known = knownMatches[0];
   if (known) return { ...known.target };

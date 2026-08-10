@@ -112,7 +112,7 @@ export async function hydratePatchProposal(
       summary: proposal.summary,
       operations,
       verify: {
-        compile: options.forceCompileVerification ?? proposal.verify?.compile ?? false,
+        compile: options.forceCompileVerification ?? false,
       },
     },
   };

@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { buildContextSnapshot } from "../context/snapshot";
 import { simulatePatchSet } from "../patch/simulate";
-import { buildCitationPatch, parseCitationJudgements } from "./citation";
+import {
+  buildCitationPatch,
+  parseCitationJudgements,
+  validateCitationProseRevision,
+} from "./citation";
 import type { PaperHit } from "../../tools/types";
 
 const hits: PaperHit[] = [{
@@ -176,4 +180,19 @@ describe("citation workflow", () => {
       candidates: [{ candidateId: "invented", relation: "supports", selected: true }],
     }, hits).ok).toBe(false);
   });
+  it("allows prose polishing only when scientific numbers and LaTeX references are preserved", () => {
+    expect(
+      validateCitationProseRevision(
+        "Mortality was 12.5% in 40 patients \\cite{Trusted2024}.",
+        "Among 40 patients, mortality was 12.5% \\cite{Trusted2024}.",
+      ).ok,
+    ).toBe(true);
+    expect(
+      validateCitationProseRevision(
+        "Mortality was 12.5% in 40 patients \\cite{Trusted2024}.",
+        "Mortality was 15% in 40 patients.",
+      ).ok,
+    ).toBe(false);
+  });
+
 });

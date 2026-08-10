@@ -1,8 +1,8 @@
 # P07 — Skill / Prompt / Router 收敛为确定性 Workflows
 
-**Status:** ⬜ Not started  
-**Priority:** P1  
-**Depends on:** P01、P02；P05/P06 实施时同步联调  
+**Status:** 🟨 Implemented — GitHub CI verification pending
+**Priority:** P1
+**Depends on:** P01、P02；P05/P06 实施时同步联调
 **Blocks:** 稳定扩展新的 Science 写作能力
 
 ---
@@ -35,6 +35,7 @@ Router
 
 ```ts
 type WorkflowKind =
+  | "research"
   | "writing"
   | "polish"
   | "citation"
@@ -43,7 +44,7 @@ type WorkflowKind =
   | "review";
 ```
 
-Router 输出 Workflow，而不是把 Skill 名当业务流程。
+Router 输出 Workflow，而不是把 Skill 名当业务流程。Research 同时可以作为独立结果流程，或作为 Writing / Polish / Citation / Review 前的可复用阶段。
 
 ---
 
@@ -78,9 +79,9 @@ src/lib/context/
 
 ### 改造
 
-- [ ] 返回 `WorkflowKind`。
-- [ ] route reason 仅用于调试，不混入最终回答。
-- [ ] 加少量真实组合规则。
+- [x] 返回 `WorkflowKind`。
+- [x] route reason 仅用于调试，不混入最终回答。
+- [x] 加少量真实组合规则。
 
 最低组合：
 
@@ -111,6 +112,7 @@ type WorkflowRequest = {
 
 Workflow Executor 决定：
 
+- 是否先运行独立 Research stage；
 - 需要哪个工具；
 - 需要哪个 Skill；
 - 中间结果是什么；
@@ -120,6 +122,16 @@ Workflow Executor 决定：
 ---
 
 ## 6. Skill 职责
+
+### research
+
+负责：
+
+- 程序化执行文献检索；
+- 产生可信、可复用的 ResearchBundle；
+- 独立使用时输出 ResearchReport，不修改文件。
+
+可组合为：`research + writing`、`research + polish`、`research + citation`、`research + review`。
 
 ### writing / polish
 
@@ -170,12 +182,12 @@ Workflow Executor 决定：
 
 检查 `skills/*`：
 
-- [ ] 标记重复职责。
-- [ ] deprecated Skill 不再注册 runtime。
-- [ ] `section-revise` 等旧入口如果必须兼容，只做 alias。
-- [ ] citation 只有一个 runtime source of truth。
-- [ ] 不再每轮加载所有相关 Skill 全文。
-- [ ] `latex-paper-en` 只在真正需要 LaTeX 专业判断时加载。
+- [x] 标记重复职责。
+- [x] deprecated Skill 不再注册 runtime。
+- [x] `section-revise` 等旧入口如果必须兼容，只做 alias。
+- [x] citation 只有一个 runtime source of truth。
+- [x] 不再每轮加载所有相关 Skill 全文。
+- [x] `latex-paper-en` 只在真正需要 LaTeX 专业判断时加载。
 
 暂时继续使用 Markdown Skill，不强制 YAML Manifest。
 
@@ -260,14 +272,14 @@ type AgentResult = {
 
 至少：
 
-- [ ] 润色这段。
-- [ ] 重写这一段但不改数据。
-- [ ] 给这句话补引用。
-- [ ] 修复 LaTeX 编译错误。
-- [ ] 审稿，不要修改。
-- [ ] 润色并补引用。
-- [ ] 只改选区。
-- [ ] 改表格格式，不改科学内容。
+- [x] 润色这段。
+- [x] 重写这一段但不改数据。
+- [x] 给这句话补引用。
+- [x] 修复 LaTeX 编译错误。
+- [x] 审稿，不要修改。
+- [x] 润色并补引用。
+- [x] 只改选区。
+- [x] 改表格格式，不改科学内容。
 
 目标是核心用户行为正确，不追求复杂 benchmark。
 
@@ -275,21 +287,27 @@ type AgentResult = {
 
 ## 12. Definition of Done
 
-- [ ] Router 返回 WorkflowKind。
-- [ ] 有明确 Workflow executor。
-- [ ] writing/citation/compile-fix/review 可独立测试。
-- [ ] 当前步骤只加载必要 Skill。
-- [ ] CitationPlan / PatchSet / ReviewReport 有明确 schema。
-- [ ] deprecated/重复 Skill 不再同时生效。
-- [ ] route debug 文本不污染用户回答。
-- [ ] structured output 解析失败时无 Keep。
+- [x] Router 返回 WorkflowKind。
+- [x] 有明确 Workflow executor。
+- [x] research/writing/polish/citation/compile-fix/review 可独立测试。
+- [x] Research 可作为独立前置阶段与 Writing / Polish / Citation / Review 组合。
+- [x] 所有产生文本修改的流程统一进入可信 LaTeX/Patch finalization。
+- [x] 当前步骤只加载必要 Skill。
+- [x] CitationPlan / PatchSet / ReviewReport 有明确 schema。
+- [x] deprecated/重复 Skill 不再同时生效。
+- [x] route debug 文本不污染用户回答。
+- [x] structured output 解析失败时无 Keep。
 
 ---
 
 ## 13. 实施记录
 
-- PR:
-- Commit:
-- Removed/deprecated skills:
-- Route fixtures:
-- Master Plan 状态已更新: [ ]
+- Source snapshot: `cursor/auth-registration-quota-200@03dd0a4bc4e977f19e9b7c58c5ef845ec9868929`
+- PR / Commit: pending repository write access
+- Removed from runtime: multi-Skill citation/compile-fix injection; deprecated `section-revise` and `literature-cite`
+- Route fixtures: requested 8 cases plus UI priority, commands, combined citation/polish, and venue ambiguity
+- Local offline regression: `106/106` tests passed
+- Plan07.2: independent Research + general LaTeX target/apply architecture implemented
+- Official commands: pending `.github/workflows/plan07-verify.yml`
+- Detailed report: [`IMPLEMENTATION_REPORT.md`](./IMPLEMENTATION_REPORT.md)
+- Master Plan 状态已更新: [x]

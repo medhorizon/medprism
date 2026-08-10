@@ -31,7 +31,7 @@ source: imbad0202/academic-research-skills@academic-paper-reviewer
 | `latex-paper-en` | 版式 / `\cite` 接线 |
 | `nature-polishing` | 纯语言润色 |
 
-默认**不**输出大段正文重写 suggestion。仅当用户明确要求「按意见改某一处」时，可给**最小** suggestion；否则只给报告 + 路线图。
+Review workflow **只输出结构化报告**，不返回 PatchSet 或 suggestion。用户点击某条意见的 Apply 后，运行时会另行启动 writing/revise workflow。
 
 ## 模式（从用户话推断）
 

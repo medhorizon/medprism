@@ -1,6 +1,7 @@
 import { assertSafeProjectRelativePath } from "../projectPath";
 import { sha256Hex } from "../patch/hash";
 import { projectRevision } from "../patch/revision";
+import { taggedPromptData } from "../promptData";
 
 export type TextSelection = { start: number; end: number };
 
@@ -100,22 +101,14 @@ export async function buildContextSnapshot(input: ContextInput): Promise<Context
 }
 
 export function formatWorkspaceContext(snapshot: ContextSnapshot): string {
-  const selectionBlock = snapshot.selection
-    ? [
-        `Selection range: ${snapshot.selection.start}-${snapshot.selection.end}`,
-        `Selected text:\n${snapshot.selectedText ?? ""}`,
-      ].join("\n")
-    : "Selection: none";
-
-  return [
-    '<workspace_context trust="untrusted-data">',
-    `Project revision: ${snapshot.projectRevision}`,
-    `Active file: ${snapshot.activeFile}`,
-    selectionBlock,
-    `Local source context:\n${snapshot.localContext}`,
-    snapshot.lastCompileLog
-      ? `Last compile log (truncated):\n${snapshot.lastCompileLog.slice(0, 3000)}`
-      : "Last compile log: none",
-    "</workspace_context>",
-  ].join("\n\n");
+  return taggedPromptData(
+    "workspace_context",
+    'trust="untrusted-data"',
+    {
+      activeFile: snapshot.activeFile,
+      selection: snapshot.selection ?? null,
+      selectedText: snapshot.selectedText ?? null,
+      localSourceContext: snapshot.localContext,
+    },
+  );
 }

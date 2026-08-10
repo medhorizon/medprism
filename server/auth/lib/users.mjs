@@ -46,7 +46,11 @@ export function saveUserNewApiCredentials(userId, tokenId, apiKey) {
   return findUserById(userId);
 }
 
-/** Create or reuse NewAPI token named by email; persist on user row. */
+/**
+ * Create or reuse NewAPI token named by email; persist on user row.
+ * Registration mints one key with NEWAPI_TOKEN_QUOTA (default 200).
+ * Later logins reuse the stored key and never auto-issue a replacement.
+ */
 export async function ensureUserNewApiKey(user) {
   if (user.newapi_api_key && user.newapi_token_id) {
     return {

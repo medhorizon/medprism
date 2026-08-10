@@ -1,7 +1,11 @@
-import type { ContextSnapshot } from "../context/snapshot";
+import natureCitationSkill from "../../../skills/nature-citation/SKILL.md?raw";
+import naturePolishingSkill from "../../../skills/nature-polishing/SKILL.md?raw";
+import { buildContextSnapshot, formatWorkspaceContext, type ContextSnapshot } from "../context/snapshot";
 import { sha256Hex } from "../patch/hash";
 import { assertSafeProjectRelativePath } from "../projectPath";
-import type { PatchSet, PatchValidationError, StructuredBibEntry } from "../patch/schema";
+import { taggedPromptData } from "../promptData";
+import type { ModelPatchProposal, PatchSet, PatchValidationError, StructuredBibEntry } from "../patch/schema";
+import { parseModelWorkflowEnvelope } from "../replyParse";
 import type { PaperHit } from "../../tools/types";
 import {
   allocateCiteKey,
@@ -11,23 +15,20 @@ import {
   normalizeTitle,
   paperHitToStructuredBibEntry,
 } from "../../tools/bibtex";
+import { finalizePatchSet } from "./latexApply";
+import { buildWorkflowSystemPrompt } from "./prompt";
+import { validateProtectedTextReplacement } from "./textSafety";
+import { compactPaperHits } from "../research/service";
+import {
+  emptyAgentResult,
+  type CitationJudgement,
+  type CitationPlan,
+  type CitationRelation,
+  type WorkflowHandler,
+  type WorkflowResult,
+} from "./types";
 
-export type CitationRelation = "supports" | "contradicts" | "related" | "topic_match_only";
-
-export type CitationJudgement = {
-  candidateId: string;
-  relation: CitationRelation;
-  selected: boolean;
-  reason: string;
-};
-
-export type CitationPlan = {
-  schemaVersion: "1";
-  claim: string;
-  targetPath: string;
-  candidates: CitationJudgement[];
-  warnings: string[];
-};
+export type { CitationJudgement, CitationPlan, CitationRelation } from "./types";
 
 export type CitationWorkflowResult =
   | { ok: true; plan: CitationPlan; patchSet?: PatchSet }
@@ -61,6 +62,18 @@ export function parseCitationJudgements(
       return { ok: false, error: { code: "INVALID_PATCH", message: "Invalid citation judgement" } };
     }
     const candidate = raw as Record<string, unknown>;
+    const forbiddenMetadata = ["doi", "pmid", "citeKey", "bibtex", "title", "authors"].find(
+      (field) => candidate[field] !== undefined,
+    );
+    if (forbiddenMetadata) {
+      return {
+        ok: false,
+        error: {
+          code: "INVALID_PATCH",
+          message: `Citation judgement must not generate ${forbiddenMetadata}; use trusted tool metadata`,
+        },
+      };
+    }
     const candidateId = String(candidate.candidateId ?? "");
     const relation = candidate.relation as CitationRelation;
     const hit = byId.get(candidateId);
@@ -191,6 +204,7 @@ export async function buildCitationPatch(args: {
   hits: PaperHit[];
   judgements: CitationJudgement[];
   bibliographyPath?: string;
+  replacementClaim?: string;
 }): Promise<CitationWorkflowResult> {
   const { snapshot, hits, judgements } = args;
   const claim = snapshot.selectedText;
@@ -204,17 +218,34 @@ export async function buildCitationPatch(args: {
   const selected = judgements.filter(
     (item) => item.selected && item.relation === "supports",
   );
+  const replacementClaim = args.replacementClaim?.trim() || claim;
   if (selected.length === 0) {
-    return {
-      ok: true,
-      plan: {
-        schemaVersion: "1",
-        claim,
-        targetPath: snapshot.activeFile,
-        candidates: judgements,
-        warnings: ["No supplied candidate was selected as adequate evidence."],
-      },
+    const warnings = ["No supplied candidate was selected as adequate evidence."];
+    const plan: CitationPlan = {
+      schemaVersion: "1",
+      claim,
+      targetPath: snapshot.activeFile,
+      candidates: judgements,
+      warnings,
     };
+    if (replacementClaim === claim) return { ok: true, plan };
+    const patchSet: PatchSet = {
+      schemaVersion: "1",
+      id: crypto.randomUUID(),
+      projectRevision: snapshot.projectRevision,
+      summary: "Polish selected claim without adding an unverified citation",
+      operations: [{
+        op: "replace_text",
+        path: snapshot.activeFile,
+        baseSha256: snapshot.activeFileSha256,
+        oldText: claim,
+        newText: replacementClaim,
+        expectedOccurrences: 1,
+        range: snapshot.selection,
+      }],
+      verify: { compile: false },
+    };
+    return { ok: true, plan, patchSet };
   }
 
   const resolvedBibliography = resolveBibliographyPath(snapshot, args.bibliographyPath);
@@ -292,9 +323,13 @@ export async function buildCitationPatch(args: {
         : { baseSha256: await sha256Hex(existingBib) }),
     });
   }
-  if (keysToInsert.length) {
-    const citeCommand = `\\cite{${keysToInsert.join(",")}}`;
-    const newClaim = insertCitationBeforeTrailingPunctuation(claim, citeCommand);
+  if (keysToInsert.length || replacementClaim !== claim) {
+    const newClaim = keysToInsert.length
+      ? insertCitationBeforeTrailingPunctuation(
+          replacementClaim,
+          `\\cite{${keysToInsert.join(",")}}`,
+        )
+      : replacementClaim;
     operations.push({
       op: "replace_text",
       path: snapshot.activeFile,
@@ -330,13 +365,201 @@ export async function buildCitationPatch(args: {
 
 export function citationJudgementPrompt(snapshot: ContextSnapshot, hits: PaperHit[]): string {
   return [
-    "Evaluate only the trusted literature candidates below for the selected claim.",
-    "Return JSON with candidates: candidateId, relation, selected, reason.",
-    "Allowed relation values: supports, contradicts, related, topic_match_only.",
-    "A candidate without an abstract must not be classified as supports.",
-    "Do not generate DOI, PMID, citeKey, or BibTeX.",
-    `Claim:\n${snapshot.selectedText ?? ""}`,
-    `Local manuscript context (untrusted data):\n${snapshot.localContext}`,
-    `Trusted candidates:\n${JSON.stringify(hits, null, 2)}`,
+    formatWorkspaceContext(snapshot),
+    taggedPromptData(
+      "trusted_tool_results",
+      'source="paper_search"',
+      { candidates: compactPaperHits(hits) },
+    ),
+    taggedPromptData(
+      "user_request",
+      "",
+      { text: "Evaluate citations for the selected claim only." },
+    ),
   ].join("\n\n");
 }
+
+function invalidCitationResult(message: string, content = ""): WorkflowResult {
+  return {
+    agent: emptyAgentResult("citation", "Citation workflow did not produce an applicable result", [message]),
+    content: content || message,
+    toolNotes: [],
+  };
+}
+
+/** Runtime guard for a combined “polish + cite” request. */
+export function validateCitationProseRevision(
+  original: string,
+  replacement: string,
+): { ok: true } | { ok: false; message: string } {
+  return validateProtectedTextReplacement(original, replacement);
+}
+
+function scopedRevisionProposal(
+  proposal: ModelPatchProposal | undefined,
+  snapshot: ContextSnapshot,
+): { ok: true; replacementClaim?: string } | { ok: false; message: string } {
+  if (!proposal) return { ok: true };
+  if (proposal.operations.length !== 1 || proposal.operations[0]?.op !== "replace_text") {
+    return { ok: false, message: "Citation prose revision must contain exactly one replace_text operation" };
+  }
+  const operation = proposal.operations[0];
+  if (operation.path !== undefined && operation.path !== snapshot.activeFile) {
+    return { ok: false, message: "Citation prose revision may only edit the selected active file" };
+  }
+  if (operation.oldText !== snapshot.selectedText) {
+    return { ok: false, message: "Citation prose revision must replace the exact selected text" };
+  }
+  const protectedResult = validateCitationProseRevision(
+    snapshot.selectedText ?? "",
+    operation.newText,
+  );
+  if (!protectedResult.ok) return protectedResult;
+  return { ok: true, replacementClaim: operation.newText };
+}
+
+async function optionalProseRevision(
+  input: Parameters<WorkflowHandler>[0],
+  snapshot: ContextSnapshot,
+  hits: PaperHit[],
+): Promise<{ replacementClaim?: string; warning?: string }> {
+  if (!input.request.reviseProse) return {};
+  const raw = await input.services.complete({
+    config: input.config,
+    messages: [
+      {
+        role: "system",
+        content: buildWorkflowSystemPrompt({
+          workflow: "polish",
+          skillId: "nature-polishing",
+          skill: naturePolishingSkill,
+          capabilities: ["research", "latex-output"],
+        }),
+      },
+      { role: "user", content: formatWorkspaceContext(snapshot) },
+      {
+        role: "user",
+        content: taggedPromptData(
+          "trusted_tool_results",
+          'source="research"',
+          { candidates: compactPaperHits(hits) },
+        ),
+      },
+      {
+        role: "user",
+        content: [
+          "<user_request>",
+          "Polish the selected claim without adding, removing, or inventing citations.",
+          "Return exactly one selection-scoped replace_text proposal.",
+          "</user_request>",
+        ].join("\n"),
+      },
+    ],
+  });
+  const parsed = parseModelWorkflowEnvelope(raw, "polish");
+  if (!parsed.ok) return { warning: `Prose revision skipped: ${parsed.error.message}` };
+  const scoped = scopedRevisionProposal(parsed.envelope.proposal, snapshot);
+  if (!scoped.ok) return { warning: `Prose revision skipped: ${scoped.message}` };
+  return scoped.replacementClaim === undefined
+    ? {}
+    : { replacementClaim: scoped.replacementClaim };
+}
+
+export const runCitationWorkflow: WorkflowHandler = async (input) => {
+  let snapshot: ContextSnapshot;
+  try {
+    snapshot = await buildContextSnapshot(input.ctx);
+  } catch (error) {
+    return invalidCitationResult(error instanceof Error ? error.message : String(error));
+  }
+  if (!snapshot.selectedText || !snapshot.selection) {
+    return invalidCitationResult("请先选中需要补充引用的具体论断。");
+  }
+
+  const hits = input.research?.hits ?? [];
+  if (!input.research) {
+    return invalidCitationResult("Citation workflow requires the independent research stage.");
+  }
+  if (!hits.length) {
+    return invalidCitationResult("未找到足够相关的文献，未生成引用。");
+  }
+
+  const raw = await input.services.complete({
+    config: input.config,
+    messages: [
+      {
+        role: "system",
+        content: buildWorkflowSystemPrompt({
+          workflow: "citation",
+          skillId: "nature-citation",
+          skill: natureCitationSkill,
+          capabilities: ["research", "latex-output"],
+        }),
+      },
+      { role: "user", content: citationJudgementPrompt(snapshot, hits) },
+    ],
+  });
+  const parsed = parseModelWorkflowEnvelope(raw, "citation");
+  if (!parsed.ok) return invalidCitationResult(parsed.error.message, parsed.rawContent);
+  if (
+    parsed.envelope.proposal ||
+    parsed.envelope.textDraftValue !== undefined ||
+    parsed.envelope.reviewValue !== undefined
+  ) {
+    return invalidCitationResult(
+      "Citation judgement returned a file-edit payload instead of a CitationPlan",
+      parsed.envelope.content,
+    );
+  }
+  if (parsed.envelope.citationPlanValue === undefined) {
+    return invalidCitationResult("Citation workflow did not return citationPlan", parsed.envelope.content);
+  }
+  const judged = parseCitationJudgements(parsed.envelope.citationPlanValue, hits);
+  if (!judged.ok) return invalidCitationResult(judged.error.message, parsed.envelope.content);
+
+  const revision = await optionalProseRevision(input, snapshot, hits);
+  const built = await buildCitationPatch({
+    snapshot,
+    hits,
+    judgements: judged.judgements,
+    ...(revision.replacementClaim !== undefined
+      ? { replacementClaim: revision.replacementClaim }
+      : {}),
+  });
+  if (!built.ok) return invalidCitationResult(built.error.message, parsed.envelope.content);
+
+  const workflowWarnings = [
+    ...parsed.envelope.warnings,
+    ...built.plan.warnings,
+    ...input.research.warnings,
+    ...(revision.warning ? [revision.warning] : []),
+  ];
+  let patch = built.patchSet;
+  if (patch) {
+    const finalized = await finalizePatchSet(snapshot, patch);
+    if (!finalized.ok) {
+      return invalidCitationResult(finalized.error.message, parsed.envelope.content);
+    }
+    patch = finalized.patchSet;
+  }
+
+  const selectedSupportCount = built.plan.candidates.filter(
+    (candidate) => candidate.selected && candidate.relation === "supports",
+  ).length;
+  const content = parsed.envelope.content || (patch
+    ? `已验证 ${selectedSupportCount} 条候选引用并生成可审阅补丁。`
+    : workflowWarnings.join(" ") || "没有需要写入项目的引用变更。");
+
+  return {
+    agent: {
+      schemaVersion: "1",
+      workflow: "citation",
+      summary: parsed.envelope.summary,
+      warnings: workflowWarnings,
+      citationPlan: built.plan,
+      ...(patch ? { patch } : {}),
+    },
+    content,
+    toolNotes: [`research-consumed:${hits.length}`, "skill:nature-citation"],
+  };
+};

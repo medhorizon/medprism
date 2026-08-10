@@ -11,7 +11,7 @@ source: davila7/claude-code-templates@scientific-writing
 
 ## 何时启用
 
-路由判定为 **biomedical**（默认，或含临床/生物医学信号）时启用。  
+路由判定为 **biomedical**（默认，或含临床/生物医学信号）时启用。
 **非生物医学**内容改走 `academic-paper`（可说「非医学」「非生物医学」强制切换）。
 
 ## 职责（只做这个）
@@ -26,12 +26,12 @@ source: davila7/claude-code-templates@scientific-writing
 | 交给谁 | 事项 |
 |---|---|
 | `academic-paper` | 非生物医学成文 |
-| `nature-citation` | 检索与生成 BibTeX / 引用候选 |
-| `latex-paper-en` | 版式、宏包、浮动体、`\cite` 插入位置、编译修复等**格式向**修改 |
+| `nature-citation` | 仅判断运行时提供的文献候选；检索与 BibTeX 由 runtime 负责 |
+| `latex-paper-en` | 版式、宏包、浮动体等**格式向**修改 |
 | `nature-polishing` | 纯语言润色（不新增科学内容时） |
 
 ## 输出方式
 
 1. 聊天简短说明写了哪一节。
-2. 用 suggestion 写入对应 `.tex` 的**正文内容**（可含占位 `\cite{TODO}` **仅当**用户未走引用流程；优先留清晰主张句，让 cite 流程补文献）。
+2. 通过当前 writing workflow 输出最小 `patchProposal`；不生成占位或虚构引用。
 3. 不主动大改 preamble、文档类、几何布局、浮动参数。

@@ -1,43 +1,43 @@
-# Skills（Plan6）
+# MedPrism Skills — Plan07 runtime map
 
-产品语义：**自然语言 → 学术成文 →（可选）生成 citation → LaTeX 格式接线**。
+Skills are focused model instructions. They are **not** business workflows and do not decide tool order, file writes, or validation.
 
-## 已确认分工
+## Deterministic workflows
 
-| Skill | 职责 |
-|---|---|
-| **`scientific-writing`** | **生物医学成文** |
-| **`academic-paper`** | **非生物医学成文**（替代上一行） |
-| **`nature-citation`** | **只生成 citation**（BibTeX/keys，经 `paper_search`） |
-| **`latex-paper-en`** | **只改格式**；并把 citation **接入** `.bib` / `\cite` |
-| **`academic-paper-reviewer`** | **审稿**：同行评议报告 + 修订路线图 |
-
-成文 domain：`detectWritingDomain`（看用户话 + 主 tex 摘要）。  
-强制入口：说「非医学 / 非生物医学 / 通用学术」→ `academic-paper`。
-
-引用链路：`cite` = `nature-citation` → `latex-paper-en`。  
-UI：统一助手（自然语言自动路由）+ 快捷芯片 **「审阅论文」**（强制 `academic-paper-reviewer`）。  
-也可直接说「审稿 / peer review / 审阅论文」触发。
-
-## 路由（`src/lib/skillRouter.ts`）
-
-| 意图 | Skills | 工具 |
+| Workflow | Primary Skill per model call | Runtime-owned steps |
 |---|---|---|
-| **write** | biomedical → `scientific-writing`；general → `academic-paper` | — |
-| **review** | `academic-paper-reviewer` | — |
-| **cite** | `nature-citation` + `latex-paper-en` | `paper_search` |
-| **latex** | `latex-paper-en` | — |
-| **polish** | `nature-polishing` | — |
-| **nature-writing** | `nature-writing` +（按 domain 的成文 Skill） | 仅明确 CNS/Nature |
-| **fix-compile** | `fix-compile-errors` + `latex-paper-en` | `compile` / `parse_compile_log` |
+| `writing` | `scientific-writing`, `academic-paper`, or explicit `nature-writing` | context, scope, hash/revision, Patch validation |
+| `polish` | `nature-polishing` | exact selection and Patch validation |
+| `latex` | `latex-paper-en` | allowed paths and compile-verification flag |
+| `citation` | `nature-citation` | search, trusted metadata, cite key, BibTeX, atomic `.bib + \cite{}` Patch |
+| `compile-fix` | `fix-compile-errors` | compile, root error, source window, path binding, one recompile |
+| `review` | `academic-paper-reviewer` | coverage manifest; no file modification |
 
-全局契约：[`_medprism-contract.md`](./_medprism-contract.md)。
+Every model call loads:
 
-## 两层存放
+```text
+Base Policy
++ one Workflow Instruction
++ at most one primary Skill
++ scoped context/tool data
+```
 
-| 层 | 路径 |
+A combined request such as “润色并补引用” remains one deterministic citation workflow with two explicit model steps. Each step still loads only one Skill.
+
+## Runtime source of truth
+
+- Router: `src/lib/skillRouter.ts`
+- Workflow table: `src/lib/workflows/executor.ts`
+- Workflow handlers: `src/lib/workflows/*.ts`
+- Contract: [`_medprism-contract.md`](./_medprism-contract.md)
+
+## Deprecated adapters
+
+`section-revise` and `literature-cite` are retained only as migration/source material. They are not registered or loaded by the Plan07 runtime. Citation and compile-fix no longer inject `latex-paper-en` as a second Skill.
+
+## Source layout
+
+| Layer | Path |
 |---|---|
-| 上游原版 | `.agents/skills/*`（`npx skills add`） |
-| MedPrism 适配 | `skills/*`（Assistant 运行时） |
-
-`section-revise` 已弃用 → `nature-polishing`。
+| Upstream source copies | `.agents/skills/*` |
+| MedPrism runtime adaptations | `skills/*` |

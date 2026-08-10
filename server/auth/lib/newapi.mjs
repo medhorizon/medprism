@@ -48,12 +48,13 @@ async function findTokenByName(name) {
   return matches[0];
 }
 
-async function createToken(name) {
+async function createToken(name, quota = env.newApiTokenQuota) {
+  const remainQuota = Math.max(1, Number(quota) || 200);
   await newApiJson("/api/token/", {
     method: "POST",
     body: JSON.stringify({
       name,
-      remain_quota: env.newApiTokenQuota,
+      remain_quota: remainQuota,
       expired_time: -1,
       unlimited_quota: false,
     }),
@@ -79,7 +80,8 @@ async function revealTokenKey(tokenId) {
 
 /**
  * Ensure a NewAPI token named by email exists; return { tokenId, apiKey }.
- * Creates once; reuses existing NewAPI token by name when possible.
+ * Creates once at registration with NEWAPI_TOKEN_QUOTA (default 200).
+ * Does not mint a replacement key on later logins when quota is exhausted.
  */
 export async function ensureNewApiTokenForEmail(email) {
   if (!env.newApiBaseUrl || !env.newApiAccessToken || !env.newApiUserId) {
@@ -91,7 +93,7 @@ export async function ensureNewApiTokenForEmail(email) {
   const name = tokenNameFromEmail(email);
   let token = await findTokenByName(name);
   if (!token) {
-    token = await createToken(name);
+    token = await createToken(name, env.newApiTokenQuota);
   }
   const apiKey = await revealTokenKey(token.id);
   return {

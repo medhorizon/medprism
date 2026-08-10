@@ -1,6 +1,6 @@
 # P05 — Citation Workflow
 
-**Status:** ⬜ Not started  
+**Status:** 🟨 Implemented; repository verification pending
 **Priority:** P1  
 **Depends on:** P01 Typed Patch、P02 Context  
 **Blocks:** 可靠的“给这句话补引用”

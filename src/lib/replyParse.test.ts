@@ -1,46 +1,47 @@
 import { describe, expect, it } from "vitest";
-import { parseAssistantReply } from "./replyParse";
+import { parseAssistantReply, parseProposalEnvelope } from "./replyParse";
 
-describe("parseAssistantReply", () => {
-  it("parses ```patch fence into PatchSet suggestion", () => {
-    const raw = `Explain.
-
-\`\`\`patch
-{
-  "schemaVersion": "1",
-  "id": "p1",
-  "summary": "Polish intro",
-  "operations": [
-    {
-      "op": "replace_text",
-      "path": "main.tex",
-      "baseSha256": "abc",
-      "oldText": "old",
-      "newText": "new",
-      "expectedOccurrences": 1
-    }
-  ]
-}
-\`\`\`
-`;
-    const parsed = parseAssistantReply(raw);
-    expect(parsed.suggestions).toHaveLength(1);
-    expect(parsed.suggestions[0]!.patchSet?.operations[0]?.op).toBe(
-      "replace_text",
-    );
-    expect(parsed.suggestions[0]!.legacyDisplayOnly).toBe(false);
+describe("assistant reply parsing", () => {
+  it("accepts a model patch proposal without runtime hashes", () => {
+    const parsed = parseProposalEnvelope(JSON.stringify({
+      content: "Polished the selected paragraph.",
+      patchProposal: {
+        schemaVersion: "1",
+        summary: "Polish selection",
+        operations: [{ op: "replace_text", oldText: "old", newText: "new" }],
+      },
+    }));
+    expect(parsed.proposal?.operations[0]?.op).toBe("replace_text");
+    expect(parsed.patchSet).toBeUndefined();
   });
 
-  it("marks legacy suggestion as display-only", () => {
-    const raw = `\`\`\`suggestion
-path: main.tex
-title: Append junk
----
-body after end
-\`\`\``;
+  it("marks a model-supplied full PatchSet as display-only", () => {
+    const raw = JSON.stringify({
+      content: "Attempted full patch.",
+      patchSet: {
+        schemaVersion: "1",
+        id: "model-owned",
+        projectRevision: "a".repeat(64),
+        summary: "unsafe metadata",
+        operations: [{
+          op: "replace_text",
+          path: "main.tex",
+          baseSha256: "b".repeat(64),
+          oldText: "old",
+          newText: "new",
+          expectedOccurrences: 1,
+        }],
+      },
+    });
     const parsed = parseAssistantReply(raw);
-    expect(parsed.suggestions[0]!.legacyDisplayOnly).toBe(true);
-    expect(parsed.suggestions[0]!.patchSet).toBeUndefined();
-    expect(parsed.suggestions[0]!.patchError?.code).toBe("INVALID_PATCH");
+    expect(parsed.suggestions[0]?.legacyDisplayOnly).toBe(true);
+    expect(parsed.suggestions[0]?.patchSet).toBeUndefined();
+  });
+
+  it("keeps legacy suggestion fences display-only", () => {
+    const parsed = parseAssistantReply(
+      "```suggestion\npath: main.tex\ntitle: legacy\n---\nbody\n```",
+    );
+    expect(parsed.suggestions[0]?.legacyDisplayOnly).toBe(true);
   });
 });

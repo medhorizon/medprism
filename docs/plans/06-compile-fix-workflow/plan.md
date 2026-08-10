@@ -1,6 +1,6 @@
 # P06 — Compile-Fix Workflow
 
-**Status:** ⬜ Not started  
+**Status:** 🟨 Implemented; repository verification pending
 **Priority:** P1  
 **Depends on:** P01 Patch、P02 Context、P03 CompileService  
 **Blocks:** 稳定的 “Fix with AI”

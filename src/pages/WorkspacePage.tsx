@@ -9,23 +9,33 @@ import { SourcePane } from "../components/SourcePane";
 import { Topbar } from "../components/Topbar";
 import { runAssistant } from "../lib/assistantRuntime";
 import { compileProject } from "../lib/compileClient";
+import { projectRevision } from "../lib/patch/revision";
+import { downloadProjectZip } from "../lib/exportZip";
 import { isUsableLlmConfig, LlmClientError, type ChatRequestMessage } from "../lib/llmClient";
-import {
-  applySuggestionToFiles,
-  undoSuggestionInFiles,
-  withSuggestionStatus,
-} from "../lib/suggestions";
+import { withSuggestionStatus } from "../lib/suggestions";
+import type { TextSelection } from "../lib/context/snapshot";
 import { useI18n } from "../i18n/context";
 import { DEMO_PROJECT_ID } from "../data/sample";
 import { loadAuth } from "../state/auth";
 import { resolveLlmConfig } from "../state/llm";
 import {
   ensureDemoProject,
+  getLastProjectStoreError,
   getProject,
   migrateLocalProjects,
-  upsertProject,
+  upsertProjectResult,
   type Project,
 } from "../state/projects";
+import {
+  PROJECT_SOFT_LIMIT_BYTES,
+  ProjectStore,
+  estimateProjectBytes,
+} from "../state/projectStore";
+import { ProjectSaveQueue } from "../state/projectSaveQueue";
+import {
+  keepSuggestionTransaction,
+  undoSuggestionTransaction,
+} from "../state/projectTransactions";
 import { filesToFileList } from "../templates";
 import type { ChatMessage } from "../types/chat";
 
@@ -33,24 +43,32 @@ const FILES_MIN = 160;
 const FILES_MAX = 360;
 const PREVIEW_MIN = 280;
 const PREVIEW_MAX = 720;
-const MAX_FIX_RECOMPILES = 2;
 
-function isDemoProject(p: Project | null | undefined) {
-  return !!p && (p.id === DEMO_PROJECT_ID || p.templateId === "demo-sample");
+function isDemoProject(project: Project | null | undefined) {
+  return !!project &&
+    (project.id === DEMO_PROJECT_ID || project.templateId === "demo-sample");
+}
+
+function initialProject(projectId: string): Project | null {
+  const migration = migrateLocalProjects();
+  if (migration.ok) {
+    try {
+      ensureDemoProject();
+    } catch {
+      // The typed storage error is shown after the component mounts.
+    }
+  }
+  return getProject(projectId) ?? null;
 }
 
 export function WorkspacePage() {
   const { projectId = "" } = useParams();
   const navigate = useNavigate();
   const { t } = useI18n();
-
-  const [project, setProject] = useState<Project | null>(() => {
-    migrateLocalProjects();
-    ensureDemoProject();
-    return getProject(projectId) ?? null;
-  });
-
+  const [project, setProject] = useState<Project | null>(() => initialProject(projectId));
+  const projectRef = useRef<Project | null>(project);
   const [activeFile, setActiveFile] = useState("main.tex");
+  const [selection, setSelection] = useState<TextSelection | undefined>();
   const [chat, setChat] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
   const [aiOpen, setAiOpen] = useState(true);
@@ -58,84 +76,144 @@ export function WorkspacePage() {
   const [filesWidth, setFilesWidth] = useState(220);
   const [previewWidth, setPreviewWidth] = useState(420);
   const [compiling, setCompiling] = useState(false);
-  const [compiled, setCompiled] = useState(true);
+  const [compiled, setCompiled] = useState(false);
   const [compileFailed, setCompileFailed] = useState(false);
   const [previewZoom, setPreviewZoom] = useState(100);
   const [toast, setToast] = useState<string | null>(null);
   const [providerOpen, setProviderOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const [auth, setAuth] = useState(() => loadAuth());
-  useEffect(() => {
-    setAuth(loadAuth());
-  }, [projectId]);
-  const [lastCompileLog, setLastCompileLog] = useState<string>("");
+  const [lastCompileLog, setLastCompileLog] = useState("");
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
-  const fixRetriesRef = useRef(0);
   const pdfUrlRef = useRef<string | null>(null);
+  const compileControllerRef = useRef<AbortController | null>(null);
+  const compileRunRef = useRef(0);
+  const storeRef = useRef<ProjectStore | null>(null);
+  const saveQueueRef = useRef<ProjectSaveQueue | null>(null);
+  const mountedRef = useRef(true);
+  const sizeWarningProjectRef = useRef<string | null>(null);
+
+  function flash(message: string) {
+    setToast(message);
+    window.setTimeout(() => setToast(null), 2200);
+  }
+
+  function setProjectState(next: Project | null) {
+    projectRef.current = next;
+    setProject(next);
+  }
+
+  if (!storeRef.current) storeRef.current = new ProjectStore(localStorage);
+  if (!saveQueueRef.current) {
+    saveQueueRef.current = new ProjectSaveQueue(
+      storeRef.current,
+      () => projectRef.current,
+      {
+        onSaved: (saved) => {
+          if (!mountedRef.current) return;
+          const current = projectRef.current;
+          if (!current || current.id !== saved.id) return;
+          setProjectState({ ...current, revision: saved.revision });
+          if (
+            estimateProjectBytes(saved) >= PROJECT_SOFT_LIMIT_BYTES &&
+            sizeWarningProjectRef.current !== saved.id
+          ) {
+            sizeWarningProjectRef.current = saved.id;
+            flash("项目体积较大。请导出 ZIP 备份，并避免继续加入二进制文件。");
+          }
+        },
+        onError: (failure) => {
+          if (!mountedRef.current) return;
+          flash(
+            failure.error.code === "QUOTA_EXCEEDED"
+              ? "保存失败：本地存储空间不足，请立即导出备份。"
+              : `保存失败：${failure.error.message}`,
+          );
+        },
+        delayMs: 750,
+      },
+    );
+  }
 
   const demo = isDemoProject(project);
-
   const quickPrompts = useMemo(() => {
-    const reviewChip = t("assistant.qReview");
-    if (demo) {
-      return [
-        t("assistant.demo.q1"),
-        t("assistant.demo.q2"),
-        t("assistant.demo.q3"),
-        t("assistant.demo.q4"),
-        reviewChip,
-      ];
-    }
-    return [
-      t("assistant.q1"),
-      t("assistant.q2"),
-      t("assistant.q3"),
-      t("assistant.q4"),
-      reviewChip,
-    ];
+    const review = t("assistant.qReview");
+    return demo
+      ? [
+          t("assistant.demo.q1"),
+          t("assistant.demo.q2"),
+          t("assistant.demo.q3"),
+          t("assistant.demo.q4"),
+          review,
+        ]
+      : [t("assistant.q1"), t("assistant.q2"), t("assistant.q3"), t("assistant.q4"), review];
   }, [demo, t]);
 
   useEffect(() => {
-    migrateLocalProjects();
-    ensureDemoProject();
-    const p = getProject(projectId);
-    if (!p) {
-      setProject(null);
-      return;
-    }
-    setProject(p);
-    const order = p.fileOrder ?? Object.keys(p.files);
+    setAuth(loadAuth());
+  }, [projectId]);
+
+  useEffect(() => {
+    return () => {
+      const leaving = projectRef.current;
+      if (leaving) void saveQueueRef.current?.flush(leaving);
+    };
+  }, [projectId]);
+
+  useEffect(() => {
+    const next = initialProject(projectId);
+    setProjectState(next);
+    setSelection(undefined);
+    sizeWarningProjectRef.current = null;
+    const storageError = getLastProjectStoreError();
+    if (storageError) flash(`项目存储错误：${storageError.message}`);
+    if (!next) return;
+    const order = next.fileOrder ?? Object.keys(next.files);
     const preferred =
-      (p.mainFile && p.files[p.mainFile] ? p.mainFile : undefined) ??
-      order.find((k) => k in p.files) ??
-      Object.keys(p.files)[0];
+      (next.mainFile && next.files[next.mainFile] ? next.mainFile : undefined) ??
+      order.find((path) => path in next.files) ??
+      Object.keys(next.files)[0] ??
+      "main.tex";
     setActiveFile(preferred);
-    const welcome = isDemoProject(p) ? t("assistant.demo.initial") : t("assistant.initial");
     setChat([
       {
         id: "a1",
         role: "assistant",
-        content: welcome,
+        content: isDemoProject(next) ? t("assistant.demo.initial") : t("assistant.initial"),
       },
     ]);
-    setCompiled(true);
+    setCompiled(false);
     setCompileFailed(false);
-    fixRetriesRef.current = 0;
   }, [projectId, t]);
 
   useEffect(() => {
+    const saveBeforeUnload = () => {
+      const current = projectRef.current;
+      if (!current) return;
+      const saved = storeRef.current?.saveProject(current, { expectedRevision: current.revision });
+      // beforeunload can be cancelled by the user. Keep the in-memory CAS revision
+      // synchronized so subsequent edits do not fail against our own save.
+      if (saved?.ok) projectRef.current = saved.value;
+    };
+    window.addEventListener("beforeunload", saveBeforeUnload);
+    return () => window.removeEventListener("beforeunload", saveBeforeUnload);
+  }, []);
+
+  useEffect(() => {
+    mountedRef.current = true;
     return () => {
+      mountedRef.current = false;
+      compileRunRef.current += 1;
+      compileControllerRef.current?.abort();
       if (pdfUrlRef.current) URL.revokeObjectURL(pdfUrlRef.current);
     };
   }, []);
 
-  const fileEntries = useMemo(() => {
-    if (!project) return [];
-    return filesToFileList(project.files, project.fileOrder);
-  }, [project]);
-
+  const fileEntries = useMemo(
+    () => (project ? filesToFileList(project.files, project.fileOrder) : []),
+    [project],
+  );
   const source = project?.files[activeFile] ?? "";
-
   const preview = useMemo(
     () => ({
       title: project?.title ?? t("templates.untitled"),
@@ -144,58 +222,60 @@ export function WorkspacePage() {
     [project?.title, t],
   );
 
-  function flash(message: string) {
-    setToast(message);
-    window.setTimeout(() => setToast(null), 1800);
-  }
-
-  function persist(next: Project) {
-    const saved = {
-      ...next,
-      updatedAt: new Date().toISOString(),
-    };
-    upsertProject(saved);
-    setProject(saved);
-  }
-
   function setPdfFromBase64(pdfBase64?: string) {
     if (!pdfBase64) return;
     const binary = atob(pdfBase64);
     const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-    const blob = new Blob([bytes], { type: "application/pdf" });
-    const url = URL.createObjectURL(blob);
+    for (let index = 0; index < binary.length; index += 1) {
+      bytes[index] = binary.charCodeAt(index);
+    }
+    const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
     if (pdfUrlRef.current) URL.revokeObjectURL(pdfUrlRef.current);
     pdfUrlRef.current = url;
     setPdfUrl(url);
   }
 
-  async function compile() {
-    if (!project || compiling) return;
+  function mainFileFor(current: Project): string {
+    return (
+      (current.mainFile && current.files[current.mainFile] ? current.mainFile : undefined) ??
+      Object.keys(current.files).find((path) => /(^|\/)main\.tex$/i.test(path)) ??
+      Object.keys(current.files).find((path) => path.toLowerCase().endsWith(".tex")) ??
+      "main.tex"
+    );
+  }
+
+  async function compileSnapshot(current: Project): Promise<boolean> {
+    const snapshotFiles = { ...current.files };
+    const revision = await projectRevision(snapshotFiles);
+    const controller = new AbortController();
+    const runId = compileRunRef.current + 1;
+    compileRunRef.current = runId;
+    compileControllerRef.current?.abort();
+    compileControllerRef.current = controller;
     setCompiling(true);
     setCompiled(false);
     setCompileFailed(false);
 
-    const mainFile =
-      project.mainFile && project.files[project.mainFile]
-        ? project.mainFile
-        : Object.keys(project.files).find((k) => /(^|\/)main\.tex$/i.test(k)) ||
-          Object.keys(project.files).find((k) => k.endsWith(".tex")) ||
-          "main.tex";
-
-    const result = await compileProject({
-      files: project.files,
-      mainFile,
-    });
-
+    const result = await compileProject(
+      {
+        jobId: crypto.randomUUID(),
+        files: snapshotFiles,
+        mainFile: mainFileFor(current),
+        projectRevision: revision,
+      },
+      controller.signal,
+    );
+    if (compileRunRef.current !== runId) return false;
+    compileControllerRef.current = null;
     setLastCompileLog(result.log || result.error || "");
     setCompiling(false);
 
-    if (result.error && !result.log) {
-      setCompileFailed(true);
+    const latest = projectRef.current;
+    const latestRevision = latest ? await projectRevision(latest.files) : "";
+    if (!latest || latestRevision !== (result.projectRevision ?? revision)) {
       setCompiled(false);
-      flash(t("workspace.toastCompileOffline"));
-      return;
+      flash("编译完成，但源码已发生变化；结果未标记为当前版本。");
+      return false;
     }
 
     if (result.ok && result.pdfBase64) {
@@ -203,137 +283,135 @@ export function WorkspacePage() {
       setCompiled(true);
       setCompileFailed(false);
       flash(t("workspace.toastCompiled"));
-      return;
+      return true;
     }
-
     setCompileFailed(true);
     setCompiled(false);
-    flash(t("workspace.toastCompileFailed"));
+    flash(
+      result.code === "SERVICE_UNAVAILABLE"
+        ? t("workspace.toastCompileOffline")
+        : t("workspace.toastCompileFailed"),
+    );
+    return false;
   }
 
-  function llmErrorMessage(err: unknown): string {
-    if (err instanceof LlmClientError) {
-      if (err.code === "not_configured") return t("assistant.needConfig");
-      if (err.code === "unauthorized") return t("assistant.errorUnauthorized");
-      if (err.code === "cors_or_network" || err.code === "network") {
+  async function compile() {
+    if (!projectRef.current || compiling) return;
+    await saveQueueRef.current?.flush();
+    const latest = projectRef.current;
+    if (latest) await compileSnapshot(latest);
+  }
+
+  function cancelCompile() {
+    compileRunRef.current += 1;
+    compileControllerRef.current?.abort();
+    compileControllerRef.current = null;
+    setCompiling(false);
+    setCompiled(false);
+    flash("编译已取消。");
+  }
+
+  function llmErrorMessage(error: unknown): string {
+    if (error instanceof LlmClientError) {
+      if (error.code === "not_configured") return t("assistant.needConfig");
+      if (error.code === "unauthorized") return t("assistant.errorUnauthorized");
+      if (error.code === "cors_or_network" || error.code === "network") {
         return t("assistant.errorNetwork");
       }
-      if (err.code === "bad_response") return t("assistant.errorBadResponse");
-      if (
-        err.status === 503 ||
-        /upstream_not_configured/i.test(err.message)
-      ) {
+      if (error.code === "bad_response") return t("assistant.errorBadResponse");
+      if (error.status === 503 || /upstream_not_configured/i.test(error.message)) {
         return t("assistant.errorUpstream");
       }
-      return t("assistant.errorHttp", { detail: err.message });
+      return t("assistant.errorHttp", { detail: error.message });
     }
     return t("assistant.errorNetwork");
   }
 
   async function send(text: string) {
     const prompt = text.trim();
-    if (!prompt || sending || !project) return;
-
+    const current = projectRef.current;
+    if (!prompt || sending || !current) return;
     const config = resolveLlmConfig();
     if (!isUsableLlmConfig(config)) {
-      setChat((prev) => [
-        ...prev,
+      setChat((previous) => [
+        ...previous,
         { id: crypto.randomUUID(), role: "user", content: prompt },
-        {
-          id: crypto.randomUUID(),
-          role: "assistant",
-          content: t("assistant.needConfig"),
-        },
+        { id: crypto.randomUUID(), role: "assistant", content: t("assistant.needConfig") },
       ]);
       setDraft("");
       setProviderOpen(true);
       return;
     }
 
-    const userMsg: ChatMessage = {
+    const userMessage: ChatMessage = {
       id: crypto.randomUUID(),
       role: "user",
       content: prompt,
     };
     const thinkingId = crypto.randomUUID();
-    setChat((prev) => [
-      ...prev,
-      userMsg,
+    setChat((previous) => [
+      ...previous,
+      userMessage,
       { id: thinkingId, role: "assistant", content: t("assistant.thinking") },
     ]);
     setDraft("");
     setSending(true);
-
-    const history: ChatRequestMessage[] = [...chat, userMsg]
-      .filter((m) => m.id !== "a1")
+    const history: ChatRequestMessage[] = [...chat, userMessage]
+      .filter((message) => message.id !== "a1")
       .slice(-12)
-      .map((m) => ({
-        role: m.role,
-        content: m.content,
-      }));
+      .map((message) => ({ role: message.role, content: message.content }));
 
     try {
       const reviewChip = t("assistant.qReview");
-      const forceReview =
-        prompt.trim() === reviewChip ||
-        prompt.trim() === t("assistant.review.q1");
-
+      const forceReview = prompt === reviewChip || prompt === t("assistant.review.q1");
+      const requestProject = projectRef.current;
+      if (!requestProject) return;
+      const selectedText = selection
+        ? requestProject.files[activeFile]?.slice(selection.start, selection.end)
+        : undefined;
       const result = await runAssistant({
         mode: "assistant",
         config,
         userText: forceReview ? t("assistant.review.q1") : prompt,
         history,
-        // 快捷芯片「审阅论文」或自然语言审稿意图 → review skill
         intent: forceReview ? "review" : "auto",
         ctx: {
-          projectId: project.id,
-          files: project.files,
-          mainFile: project.mainFile,
-          lastCompileLog,
+          projectId: requestProject.id,
+          files: { ...requestProject.files },
+          ...(requestProject.mainFile ? { mainFile: requestProject.mainFile } : {}),
+          activeFile,
+          ...(selection ? { selection } : {}),
+          ...(selectedText !== undefined ? { selectedText } : {}),
+          ...(lastCompileLog ? { lastCompileLog } : {}),
         },
       });
-
       if (result.lastCompileLog) setLastCompileLog(result.lastCompileLog);
-      if (result.pdfBase64) {
-        setPdfFromBase64(result.pdfBase64);
-        setCompiled(true);
-        setCompileFailed(false);
-      }
-
-      const notes =
-        result.toolNotes.length > 0
-          ? `\n\n_${result.toolNotes.join(" · ")}_`
-          : "";
+      if (result.pdfBase64) setPdfFromBase64(result.pdfBase64);
 
       const primarySuggestion = result.suggestions[0];
-      const extra =
-        result.suggestions.length > 1
-          ? result.suggestions.slice(1).map((s) => ({
-              id: crypto.randomUUID(),
-              role: "assistant" as const,
-              content: s?.title ? `Additional suggestion: ${s.title}` : "Additional suggestion",
-              suggestion: s,
-            }))
-          : [];
-
-      setChat((prev) => {
-        const next = prev.map((m) =>
-          m.id === thinkingId
-            ? {
-                ...m,
-                content: `${result.content}${notes}`,
-                suggestion: primarySuggestion,
-              }
-            : m,
+      const extra = result.suggestions.slice(1).map((suggestion) => ({
+        id: crypto.randomUUID(),
+        role: "assistant" as const,
+        content: suggestion.title || "Additional suggestion",
+        suggestion,
+      }));
+      setChat((previous) => {
+        const next = previous.map((message) =>
+          message.id === thinkingId
+            ? { ...message, content: result.content, suggestion: primarySuggestion }
+            : message,
         );
         return extra.length ? [...next, ...extra] : next;
       });
-    } catch (err) {
-      const message = llmErrorMessage(err);
-      setChat((prev) =>
-        prev.map((m) => (m.id === thinkingId ? { ...m, content: message } : m)),
+    } catch (error) {
+      setChat((previous) =>
+        previous.map((message) =>
+          message.id === thinkingId
+            ? { ...message, content: llmErrorMessage(error) }
+            : message,
+        ),
       );
-      if (err instanceof LlmClientError && err.code === "not_configured") {
+      if (error instanceof LlmClientError && error.code === "not_configured") {
         setProviderOpen(true);
       }
     } finally {
@@ -341,8 +419,18 @@ export function WorkspacePage() {
     }
   }
 
+  async function commitProject(next: Project, expectedRevision: number): Promise<Project> {
+    const saved = upsertProjectResult(
+      { ...next, updatedAt: new Date().toISOString() },
+      expectedRevision,
+    );
+    if (!saved.ok) throw new Error(saved.error.message);
+    setProjectState(saved.value);
+    return saved.value;
+  }
+
   async function keepSuggestion(message: ChatMessage) {
-    if (!project || !message.suggestion || message.suggestion.status === "applied") return;
+    if (!message.suggestion || message.suggestion.status === "applied") return;
     if (
       message.suggestion.legacyDisplayOnly ||
       message.suggestion.patchError ||
@@ -351,107 +439,92 @@ export function WorkspacePage() {
       flash(t("assistant.patchNeedRegen"));
       return;
     }
-
-    const result = await applySuggestionToFiles(project.files, message);
-    if (!result) {
-      flash(t("assistant.patchStale"));
-      setChat((msgs) =>
-        withSuggestionStatus(msgs, message.id, {
-          patchError: {
-            code: "BASE_MISMATCH",
-            message: "Patch is stale or invalid — regenerate",
-          },
-        }),
-      );
-      return;
-    }
-
-    setActiveFile(result.target);
-    const nextProject = { ...project, files: result.files };
-    persist(nextProject);
-    setChat((msgs) =>
-      withSuggestionStatus(msgs, message.id, {
-        status: "applied",
-        appliedTo: result.target,
-        previousFiles: result.previousFiles,
-        postApplyHashes: result.postApplyHashes,
-        previews: result.previews,
-        previousContent: undefined,
-        path: message.suggestion?.path,
-        patchError: undefined,
-      }),
-    );
-    setCompiled(false);
-    flash(t("workspace.toastKept"));
-
-    // Auto recompile after compile-fix Keep (max 2)
-    const looksLikeFix =
-      /\.tex/i.test(result.target) &&
-      (compileFailed || /compile|error|fix|警告|编译/i.test(message.content + message.suggestion.title));
-
-    if (looksLikeFix && fixRetriesRef.current < MAX_FIX_RECOMPILES) {
-      fixRetriesRef.current += 1;
-      flash(t("workspace.toastRecompiling"));
-      setCompiling(true);
-      const mainFile =
-        nextProject.mainFile && nextProject.files[nextProject.mainFile]
-          ? nextProject.mainFile
-          : Object.keys(nextProject.files).find((k) => /(^|\/)main\.tex$/i.test(k)) ||
-            Object.keys(nextProject.files).find((k) => k.endsWith(".tex")) ||
-            "main.tex";
-      const compiledResult = await compileProject({
-        files: nextProject.files,
-        mainFile,
+    await saveQueueRef.current?.flush();
+    try {
+      const result = await keepSuggestionTransaction<Project>({
+        getCurrent: () => projectRef.current,
+        commit: commitProject,
+        message,
       });
-      setLastCompileLog(compiledResult.log || compiledResult.error || "");
-      setCompiling(false);
-      if (compiledResult.ok && compiledResult.pdfBase64) {
-        setPdfFromBase64(compiledResult.pdfBase64);
-        setCompiled(true);
-        setCompileFailed(false);
-        fixRetriesRef.current = 0;
-        flash(t("workspace.toastCompiled"));
-      } else {
-        setCompileFailed(true);
-        setCompiled(false);
-        flash(t("workspace.toastCompileFailed"));
+      if (!result.ok) {
+        flash(result.error.message);
+        setChat((messages) =>
+          withSuggestionStatus(messages, message.id, { patchError: result.error }),
+        );
+        return;
       }
+      if (result.target) setActiveFile(result.target);
+      setSelection(undefined);
+      setChat((messages) =>
+        withSuggestionStatus(messages, message.id, result.suggestionPatch),
+      );
+      setCompiled(false);
+      flash(t("workspace.toastKept"));
+      if (result.verifyCompile) {
+        flash(t("workspace.toastRecompiling"));
+        await compileSnapshot(result.project);
+      }
+    } catch (error) {
+      flash(error instanceof Error ? error.message : String(error));
     }
   }
 
   async function undoSuggestion(message: ChatMessage) {
-    if (!project) return;
     const suggestion = message.suggestion;
     if (!suggestion) return;
-
-    if (suggestion.status === "applied") {
-      const result = await undoSuggestionInFiles(project.files, suggestion);
+    if (suggestion.status !== "applied") {
+      setChat((messages) =>
+        withSuggestionStatus(messages, message.id, { status: "dismissed" }),
+      );
+      flash(t("workspace.toastDismissed"));
+      return;
+    }
+    await saveQueueRef.current?.flush();
+    try {
+      const result = await undoSuggestionTransaction<Project>({
+        getCurrent: () => projectRef.current,
+        commit: commitProject,
+        suggestion,
+      });
       if (!result.ok) {
-        flash(t("assistant.undoConflict"));
+        flash(result.error.message || t("assistant.undoConflict"));
         return;
       }
-      const target =
-        suggestion.appliedTo || Object.keys(suggestion.previousFiles ?? {})[0];
-      if (target) setActiveFile(target);
-      persist({ ...project, files: result.files });
-      setChat((msgs) =>
-        withSuggestionStatus(msgs, message.id, {
-          status: "undone",
-          previousContent: undefined,
-          previousFiles: undefined,
-          postApplyHashes: undefined,
-          appliedTo: undefined,
-        }),
+      if (suggestion.appliedTo) setActiveFile(suggestion.appliedTo);
+      setSelection(undefined);
+      setChat((messages) =>
+        withSuggestionStatus(messages, message.id, result.suggestionPatch),
       );
       setCompiled(false);
       flash(t("workspace.toastUndone"));
-      return;
+    } catch (error) {
+      flash(error instanceof Error ? error.message : String(error));
     }
+  }
 
-    setChat((msgs) =>
-      withSuggestionStatus(msgs, message.id, { status: "dismissed" }),
-    );
-    flash(t("workspace.toastDismissed"));
+  function editSource(value: string) {
+    const current = projectRef.current;
+    if (!current) return;
+    setSelection(undefined);
+    setProjectState({
+      ...current,
+      updatedAt: new Date().toISOString(),
+      files: { ...current.files, [activeFile]: value },
+    });
+    saveQueueRef.current?.schedule();
+    setCompiled(false);
+  }
+
+  function exportProject() {
+    const current = projectRef.current;
+    if (!current) return;
+    try {
+      const safeName = current.title.replace(/[\\/:*?"<>|]+/g, "-").trim() || "medprism-project";
+      downloadProjectZip(current.files, `${safeName}.zip`);
+      flash(t("workspace.toastExported"));
+    } catch (error) {
+      flash(`导出失败：${error instanceof Error ? error.message : String(error)}`);
+    }
   }
 
   function fixWithAi() {
@@ -480,13 +553,13 @@ export function WorkspacePage() {
         compiling={compiling}
         compiled={compiled && !compileFailed}
         aiOpen={aiOpen}
-        onToggleAssistant={() => setAiOpen((v) => !v)}
-        onExport={() => flash(t("workspace.toastExported"))}
+        onToggleAssistant={() => setAiOpen((value) => !value)}
+        onExport={exportProject}
         onCompile={() => void compile()}
+        onCancelCompile={cancelCompile}
         onProjectClick={() => navigate("/projects")}
         onApiSettings={() => setProviderOpen(true)}
       />
-
       <main
         className="workspace"
         style={{
@@ -496,7 +569,10 @@ export function WorkspacePage() {
         <FileTree
           files={fileEntries}
           activeFileId={activeFile}
-          onSelect={setActiveFile}
+          onSelect={(path) => {
+            setActiveFile(path);
+            setSelection(undefined);
+          }}
           accountLabel={
             auth.status === "authenticated"
               ? auth.displayName || auth.contact || t("common.guest")
@@ -504,35 +580,25 @@ export function WorkspacePage() {
           }
           onAccountClick={() => {
             setAuth(loadAuth());
-            navigate(
-              auth.status === "authenticated" ? "/projects" : "/login?mode=login",
-            );
+            navigate(auth.status === "authenticated" ? "/projects" : "/login?mode=login");
           }}
           onApiSettings={() => setProviderOpen(true)}
         />
-
         <ResizeHandle
           label={t("resize.files")}
-          onResize={(dx) =>
-            setFilesWidth((w) => Math.min(FILES_MAX, Math.max(FILES_MIN, w + dx)))
+          onResize={(delta) =>
+            setFilesWidth((width) => Math.min(FILES_MAX, Math.max(FILES_MIN, width + delta)))
           }
         />
-
         <section className="panel panel-center">
           <div className="source-stack">
             <SourcePane
               fileName={activeFile}
               value={source}
-              onChange={(value) => {
-                persist({
-                  ...project,
-                  files: { ...project.files, [activeFile]: value },
-                });
-                setCompiled(false);
-              }}
+              onChange={editSource}
+              onSelectionChange={setSelection}
               onFixWithAi={fixWithAi}
             />
-
             {aiOpen && (
               <AssistantCard
                 height={aiHeight}
@@ -543,22 +609,22 @@ export function WorkspacePage() {
                 onDraftChange={setDraft}
                 onSend={(text) => void send(text)}
                 quickPrompts={quickPrompts}
-                onKeep={(m) => void keepSuggestion(m)}
-                onUndo={undoSuggestion}
+                onKeep={(message) => void keepSuggestion(message)}
+                onUndo={(message) => void undoSuggestion(message)}
                 sending={sending}
               />
             )}
           </div>
         </section>
-
         <ResizeHandle
           label={t("resize.preview")}
           invert
-          onResize={(dx) =>
-            setPreviewWidth((w) => Math.min(PREVIEW_MAX, Math.max(PREVIEW_MIN, w + dx)))
+          onResize={(delta) =>
+            setPreviewWidth((width) =>
+              Math.min(PREVIEW_MAX, Math.max(PREVIEW_MIN, width + delta)),
+            )
           }
         />
-
         <PreviewPane
           zoom={previewZoom}
           onZoomChange={setPreviewZoom}
@@ -572,14 +638,8 @@ export function WorkspacePage() {
           compileFailed={compileFailed}
         />
       </main>
-
       <ProviderSettingsModal open={providerOpen} onClose={() => setProviderOpen(false)} />
-
-      {toast && (
-        <div className="toast" role="status">
-          {toast}
-        </div>
-      )}
+      {toast && <div className="toast" role="status">{toast}</div>}
     </div>
   );
 }

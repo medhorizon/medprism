@@ -1,6 +1,6 @@
 # P04 — localStorage 稳定性与真实导出
 
-**Status:** ⬜ Not started  
+**Status:** 🟨 Implemented; repository verification pending
 **Priority:** P1  
 **Depends on:** 无  
 **Blocks:** V1 长期可靠自用/小范围分发

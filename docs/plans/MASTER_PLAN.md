@@ -44,12 +44,12 @@ V1 是否成功，优先看这条链路是否可靠，而不是 Skill 数量或 
 
 | ID | Plan | 优先级 | 依赖 | 状态 |
 |---|---|---:|---|---|
-| P01 | [Typed Patch / 原位替换](./01-patch-engine/plan.md) | P0 | 无 | ⬜ Not started |
-| P02 | [activeFile / Selection 上下文](./02-context-selection/plan.md) | P0 | P01 可并行开发，联调依赖 P01 | ⬜ Not started |
-| P03 | [Electron CompileService](./03-electron-compile-service/plan.md) | P0 | 无；Fix 联调依赖 P01 | ⬜ Not started |
-| P04 | [localStorage 稳定性与真实导出](./04-localstorage-hardening/plan.md) | P1 | 无 | ⬜ Not started |
-| P05 | [Citation Workflow](./05-citation-workflow/plan.md) | P1 | P01、P02 | ⬜ Not started |
-| P06 | [Compile-Fix Workflow](./06-compile-fix-workflow/plan.md) | P1 | P01、P02、P03 | ⬜ Not started |
+| P01 | [Typed Patch / 原位替换](./01-patch-engine/plan.md) | P0 | 无 | 🟨 Verification pending |
+| P02 | [activeFile / Selection 上下文](./02-context-selection/plan.md) | P0 | P01 可并行开发，联调依赖 P01 | 🟨 Verification pending |
+| P03 | [Electron CompileService](./03-electron-compile-service/plan.md) | P0 | 无；Fix 联调依赖 P01 | 🟨 Verification pending |
+| P04 | [localStorage 稳定性与真实导出](./04-localstorage-hardening/plan.md) | P1 | 无 | 🟨 Verification pending |
+| P05 | [Citation Workflow](./05-citation-workflow/plan.md) | P1 | P01、P02 | 🟨 Verification pending |
+| P06 | [Compile-Fix Workflow](./06-compile-fix-workflow/plan.md) | P1 | P01、P02、P03 | 🟨 Verification pending |
 | P07 | [Skill / Prompt / Router 收敛](./07-skill-prompt-workflows/plan.md) | P1 | P01、P02；可与 P05/P06 逐步联调 | ⬜ Not started |
 | P08 | [快捷登录风险隔离](./08-quick-login-risk-control/plan.md) | P1 | 无 | ⬜ Not started |
 | P09 | [Electron 发布版清理](./09-packaged-app-cleanup/plan.md) | P1 | P03 | ⬜ Not started |

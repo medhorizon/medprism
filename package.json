@@ -48,7 +48,9 @@
     "files": [
       "dist/**/*",
       "electron/**/*",
-      "package.json"
+      "package.json",
+      "!electron/**/*.test.*",
+      "shared/**/*"
     ],
     "asar": true,
     "win": {
@@ -89,6 +91,15 @@
     },
     "dmg": {
       "artifactName": "MedPrism-${version}-macos-arm64.${ext}"
-    }
+    },
+    "extraResources": [
+      {
+        "from": "resources/tectonic",
+        "to": "tectonic",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ]
   }
 }

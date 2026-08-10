@@ -9,6 +9,7 @@ type TopbarProps = {
   onToggleAssistant: () => void;
   onExport: () => void;
   onCompile: () => void;
+  onCancelCompile?: () => void;
   onProjectClick?: () => void;
   onApiSettings?: () => void;
 };
@@ -21,6 +22,7 @@ export function Topbar({
   onToggleAssistant,
   onExport,
   onCompile,
+  onCancelCompile,
   onProjectClick,
   onApiSettings,
 }: TopbarProps) {
@@ -32,7 +34,6 @@ export function Topbar({
         <div className="brand-mark">M</div>
         <div className="brand-name">MedPrism</div>
       </div>
-
       <button
         className="project-chip"
         type="button"
@@ -43,7 +44,6 @@ export function Topbar({
       </button>
 
       <div className="topbar-spacer" />
-
       <div className="status-pill" aria-live="polite">
         <span className={`status-dot ${compiled ? "ok" : "warn"}`} />
         {compiling
@@ -54,7 +54,6 @@ export function Topbar({
       </div>
 
       <LangSwitch />
-
       <div className="topbar-actions">
         {onApiSettings && (
           <button className="btn btn-ghost" type="button" onClick={onApiSettings}>
@@ -75,10 +74,10 @@ export function Topbar({
         <button
           className="btn btn-primary"
           type="button"
-          disabled={compiling}
-          onClick={onCompile}
+          onClick={compiling ? onCancelCompile : onCompile}
+          disabled={compiling && !onCancelCompile}
         >
-          {compiling ? t("topbar.compiling") : t("topbar.compile")}
+          {compiling ? t("common.cancel") : t("topbar.compile")}
         </button>
       </div>
     </header>

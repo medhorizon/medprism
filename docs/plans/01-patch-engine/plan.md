@@ -1,6 +1,6 @@
 # P01 — Typed Patch / `.tex` 原位替换
 
-**Status:** ✅ Implemented (local)  
+**Status:** 🟨 Implemented; repository verification pending
 **Priority:** P0  
 **Depends on:** 无  
 **Blocks:** P05 Citation、P06 Compile-Fix、稳定的 writing/polish workflow

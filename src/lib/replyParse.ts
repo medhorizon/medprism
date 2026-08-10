@@ -1,176 +1,115 @@
-import { parsePatchSet, type PatchSet } from "./patch/schema";
+import {
+  parseModelPatchProposal,
+  parsePatchSet,
+  type ModelPatchProposal,
+  type PatchSet,
+  type PatchValidationError,
+} from "./patch/schema";
 import type { ChatSuggestion } from "../types/chat";
 
-export type ParsedAssistantReply = {
+export type ProposalEnvelope = {
   content: string;
-  suggestions: ChatSuggestion[];
+  proposal?: ModelPatchProposal;
+  patchSet?: PatchSet;
+  error?: PatchValidationError;
 };
 
-/**
- * Parse assistant output for PatchSet (preferred) or legacy suggestion fences.
- * Legacy `{path,title,body}` is kept as display-only (no Keep).
- */
-export function parseAssistantReply(raw: string): ParsedAssistantReply {
-  const suggestions: ChatSuggestion[] = [];
-  let content = raw.trim();
-
-  const jsonFence = raw.match(/```json\s*([\s\S]*?)```/i);
-  if (jsonFence) {
-    try {
-      const parsed = JSON.parse(jsonFence[1]!) as {
-        content?: string;
-        patchSet?: unknown;
-        suggestions?: Array<{ path?: string; title?: string; body?: string }>;
-      };
-      if (typeof parsed.content === "string") content = parsed.content;
-
-      if (parsed.patchSet !== undefined) {
-        const ps = parsePatchSet(parsed.patchSet);
-        if (ps.ok) {
-          suggestions.push(suggestionFromPatchSet(ps.patchSet));
-          content =
-            raw.replace(jsonFence[0], "").replace(/\n{3,}/g, "\n\n").trim() ||
-            content;
-          return { content, suggestions };
-        }
-        suggestions.push({
-          title: "Invalid patch",
-          body: ps.error.message,
-          patchError: ps.error,
-          legacyDisplayOnly: false,
-        });
-        content =
-          raw.replace(jsonFence[0], "").replace(/\n{3,}/g, "\n\n").trim() ||
-          content;
-        return { content, suggestions };
-      }
-
-      for (const s of parsed.suggestions ?? []) {
-        if (s.body) {
-          suggestions.push({
-            path: s.path,
-            title: s.title || s.path || "suggestion",
-            body: s.body,
-            status: "pending",
-            legacyDisplayOnly: true,
-            patchError: {
-              code: "INVALID_PATCH",
-              message:
-                "Legacy suggestion format — display only. Use patchSet with replace_text.",
-            },
-          });
-        }
-      }
-      if (suggestions.length) {
-        content =
-          raw.replace(jsonFence[0], "").replace(/\n{3,}/g, "\n\n").trim() ||
-          content;
-        return { content, suggestions };
-      }
-    } catch {
-      /* fall through */
-    }
+export function extractJsonValue(raw: string): unknown {
+  const fence = raw.match(/```json\s*([\s\S]*?)```/i) ?? raw.match(/```patch\s*([\s\S]*?)```/i);
+  const candidate = fence?.[1]?.trim() ?? raw.trim();
+  try {
+    return JSON.parse(candidate);
+  } catch {
+    const start = candidate.indexOf("{");
+    const end = candidate.lastIndexOf("}");
+    if (start >= 0 && end > start) return JSON.parse(candidate.slice(start, end + 1));
+    throw new Error("Model response did not contain valid JSON");
   }
+}
 
-  const patchFenceRe = /```patch\s*([\s\S]*?)```/gi;
-  let stripped = raw;
-  let pm: RegExpExecArray | null;
-  while ((pm = patchFenceRe.exec(raw)) !== null) {
-    try {
-      const parsed = JSON.parse(pm[1]!.trim()) as unknown;
-      const ps = parsePatchSet(parsed);
-      if (ps.ok) {
-        suggestions.push(suggestionFromPatchSet(ps.patchSet));
-      } else {
-        suggestions.push({
-          title: "Invalid patch",
-          body: ps.error.message,
-          patchError: ps.error,
-        });
-      }
-    } catch {
-      suggestions.push({
-        title: "Invalid patch",
-        body: "Could not parse ```patch JSON",
-        patchError: {
-          code: "INVALID_PATCH",
-          message: "Could not parse ```patch JSON",
+export function parseProposalEnvelope(raw: string): ProposalEnvelope {
+  try {
+    const parsed = extractJsonValue(raw);
+    if (!parsed || typeof parsed !== "object") {
+      return { content: raw.trim() };
+    }
+    const envelope = parsed as Record<string, unknown>;
+    const content = typeof envelope.content === "string" ? envelope.content : "";
+
+    if (envelope.patchProposal !== undefined) {
+      const proposal = parseModelPatchProposal(envelope.patchProposal);
+      if (!proposal.ok) return { content, error: proposal.error };
+      return { content, proposal: proposal.proposal };
+    }
+    if (envelope.patchSet !== undefined) {
+      const patch = parsePatchSet(envelope.patchSet);
+      if (!patch.ok) return { content, error: patch.error };
+      return { content, patchSet: patch.patchSet };
+    }
+    return { content: content || raw.trim() };
+  } catch (error) {
+    return {
+      content: raw.trim(),
+      error: {
+        code: "INVALID_PATCH",
+        message: error instanceof Error ? error.message : String(error),
+      },
+    };
+  }
+}
+
+/** Compatibility parser for existing tests/callers. Legacy suggestions remain display-only. */
+export function parseAssistantReply(raw: string): {
+  content: string;
+  suggestions: ChatSuggestion[];
+} {
+  const parsed = parseProposalEnvelope(raw);
+  if (parsed.patchSet) {
+    return {
+      content: parsed.content,
+      suggestions: [
+        {
+          title: parsed.patchSet.summary || "Untrusted patch metadata",
+          body: "Model-supplied PatchSet metadata is display-only. Regenerate as patchProposal.",
+          legacyDisplayOnly: true,
+          patchError: {
+            code: "INVALID_PATCH",
+            message: "The runtime must attach hash and revision metadata",
+          },
         },
-      });
-    }
-    stripped = stripped.replace(pm[0], "");
+      ],
+    };
   }
-
-  if (suggestions.length) {
-    content = stripped.replace(/\n{3,}/g, "\n\n").trim() || content;
-    return { content, suggestions };
-  }
-
-  const fenceRe = /```suggestion\s*([\s\S]*?)```/gi;
-  stripped = raw;
-  let m: RegExpExecArray | null;
-  while ((m = fenceRe.exec(raw)) !== null) {
-    const parsed = parseLegacySuggestionFence(m[1] ?? "");
-    if (parsed) suggestions.push(parsed);
-    stripped = stripped.replace(m[0], "");
-  }
-
-  if (suggestions.length) {
-    content = stripped.replace(/\n{3,}/g, "\n\n").trim() || content;
-  }
-
-  return { content, suggestions };
-}
-
-function suggestionFromPatchSet(patchSet: PatchSet): ChatSuggestion {
-  return {
-    title: patchSet.summary,
-    body: patchSet.summary,
-    path: patchSet.operations[0]?.path,
-    status: "pending",
-    patchSet,
-    legacyDisplayOnly: false,
-  };
-}
-
-function parseLegacySuggestionFence(inner: string): ChatSuggestion | null {
-  const parts = inner.split(/\n---\n/);
-  if (parts.length >= 2) {
-    const header = parts[0]!;
-    const body = parts.slice(1).join("\n---\n").trim();
-    const path = header.match(/^path:\s*(.+)$/im)?.[1]?.trim();
-    const title = header.match(/^title:\s*(.+)$/im)?.[1]?.trim();
-    if (!body) return null;
+  if (parsed.error) {
     return {
-      path,
-      title: title || path || "suggestion",
-      body,
-      status: "pending",
-      legacyDisplayOnly: true,
-      patchError: {
-        code: "INVALID_PATCH",
-        message:
-          "Legacy suggestion format — display only. Use ```patch with replace_text.",
-      },
+      content: parsed.content,
+      suggestions: [
+        {
+          title: "Invalid patch",
+          body: parsed.error.message,
+          patchError: parsed.error,
+          legacyDisplayOnly: true,
+        },
+      ],
     };
   }
 
-  const lines = inner.trim().split("\n");
-  const pathLine = lines[0]?.match(/^path:\s*(.+)$/i);
-  if (pathLine && lines.length > 1) {
+  const legacy = raw.match(/```suggestion\s*([\s\S]*?)```/i);
+  if (legacy) {
     return {
-      path: pathLine[1]!.trim(),
-      title: pathLine[1]!.trim(),
-      body: lines.slice(1).join("\n").replace(/^---\s*\n/, "").trim(),
-      status: "pending",
-      legacyDisplayOnly: true,
-      patchError: {
-        code: "INVALID_PATCH",
-        message:
-          "Legacy suggestion format — display only. Use ```patch with replace_text.",
-      },
+      content: raw.replace(legacy[0], "").trim(),
+      suggestions: [
+        {
+          title: "Legacy suggestion",
+          body: legacy[1]!.trim(),
+          legacyDisplayOnly: true,
+          patchError: {
+            code: "INVALID_PATCH",
+            message: "Legacy suggestion is display-only; regenerate as patchProposal",
+          },
+        },
+      ],
     };
   }
-
-  return null;
+  return { content: parsed.content || raw.trim(), suggestions: [] };
 }

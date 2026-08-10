@@ -1,12 +1,8 @@
-import { applyPatchSet, previewPatchSet, undoPatchSet } from "./patch/apply";
-import { sha256Hex } from "./patch/hash";
+import { applyPatchSet, undoPatchSet } from "./patch/apply";
+import type { PatchValidationError } from "./patch/schema";
 import { validatePatchSet } from "./patch/validate";
 import type { ChatMessage, ChatSuggestion } from "../types/chat";
 
-/**
- * Enrich a parsed suggestion against current files: validate PatchSet,
- * attach previews, or mark legacy display-only (no Keep).
- */
 export async function enrichSuggestion(
   suggestion: ChatSuggestion,
   files: Record<string, string>,
@@ -15,133 +11,102 @@ export async function enrichSuggestion(
     return {
       ...suggestion,
       legacyDisplayOnly: true,
-      patchError: {
-        code: "INVALID_PATCH",
-        message:
-          "Legacy suggestion (no PatchSet). Display only — regenerate with replace_text / insert / bib_add.",
-      },
-      previews: undefined,
+      patchError:
+        suggestion.patchError ?? {
+          code: "INVALID_PATCH",
+          message: "Legacy suggestion is display-only. Regenerate it as a typed patch.",
+        },
     };
   }
 
-  const validated = await validatePatchSet(suggestion.patchSet, files);
+  const validated = await validatePatchSet(files, suggestion.patchSet);
   if (!validated.ok) {
     return {
       ...suggestion,
-      legacyDisplayOnly: false,
+      status: suggestion.status ?? "pending",
       patchError: validated.error,
-      previews: previewPatchSet(suggestion.patchSet, files),
+      previews: undefined,
     };
   }
-
   return {
     ...suggestion,
-    legacyDisplayOnly: false,
+    status: suggestion.status ?? "pending",
     patchError: undefined,
-    title: suggestion.title || suggestion.patchSet.summary,
-    path: suggestion.path || suggestion.patchSet.operations[0]?.path,
-    body: suggestion.body || suggestion.patchSet.summary,
-    previews: previewPatchSet(suggestion.patchSet, files),
+    previews: validated.simulation.changes,
+    path: suggestion.path ?? validated.simulation.affectedPaths[0],
   };
 }
+
+export type ApplySuggestionResult =
+  | {
+      ok: true;
+      files: Record<string, string>;
+      target: string;
+      affectedPaths: string[];
+      previousFiles: NonNullable<ChatSuggestion["previousFiles"]>;
+      postApplyHashes: Record<string, string>;
+      previews: NonNullable<ChatSuggestion["previews"]>;
+      baseProjectRevision: string;
+      nextProjectRevision: string;
+    }
+  | { ok: false; error: PatchValidationError };
 
 export async function applySuggestionToFiles(
   files: Record<string, string>,
   message: ChatMessage,
-): Promise<{
-  files: Record<string, string>;
-  target: string;
-  previousFiles: Record<string, string>;
-  postApplyHashes: Record<string, string>;
-  previews: NonNullable<ChatSuggestion["previews"]>;
-} | null> {
+): Promise<ApplySuggestionResult> {
   const suggestion = message.suggestion;
-  if (!suggestion) return null;
-  if (suggestion.status === "applied") return null;
-  if (!suggestion.patchSet || suggestion.legacyDisplayOnly || suggestion.patchError) {
-    return null;
+  if (!suggestion?.patchSet || suggestion.legacyDisplayOnly) {
+    return {
+      ok: false,
+      error: {
+        code: "INVALID_PATCH",
+        message: "Suggestion does not contain a Keep-eligible typed patch",
+      },
+    };
   }
 
-  // Re-validate at Keep time (file may have changed since message was shown)
-  const result = await applyPatchSet(suggestion.patchSet, files);
-  if (!result.ok) return null;
-
-  const postApplyHashes: Record<string, string> = {};
-  for (const path of result.affectedPaths) {
-    postApplyHashes[path] = await sha256Hex(result.files[path] ?? "");
-  }
-
+  const applied = await applyPatchSet(files, suggestion.patchSet);
+  if (!applied.ok) return applied;
+  const simulation = applied.simulation;
   return {
-    files: result.files,
-    target: result.affectedPaths[0]!,
-    previousFiles: result.previousFiles,
-    postApplyHashes,
-    previews: result.previews,
+    ok: true,
+    files: simulation.nextFiles,
+    target: simulation.affectedPaths.find((path) => path.toLowerCase().endsWith(".tex")) ??
+      simulation.affectedPaths[0]!,
+    affectedPaths: simulation.affectedPaths,
+    previousFiles: simulation.snapshots,
+    postApplyHashes: simulation.postApplyHashes,
+    previews: simulation.changes,
+    baseProjectRevision: simulation.baseProjectRevision,
+    nextProjectRevision: simulation.nextProjectRevision,
   };
 }
 
 export async function undoSuggestionInFiles(
   files: Record<string, string>,
   suggestion: ChatSuggestion,
-): Promise<
-  | { ok: true; files: Record<string, string> }
-  | { ok: false; reason: string }
-> {
-  if (
-    suggestion.status !== "applied" ||
-    !suggestion.previousFiles ||
-    !suggestion.postApplyHashes
-  ) {
-    // Legacy single-file undo (pre-patch messages)
-    if (
-      suggestion.status === "applied" &&
-      suggestion.appliedTo &&
-      suggestion.previousContent != null
-    ) {
-      return {
-        ok: true,
-        files: {
-          ...files,
-          [suggestion.appliedTo]: suggestion.previousContent,
-        },
-      };
-    }
-    return { ok: false, reason: "Nothing to undo" };
+) {
+  if (!suggestion.previousFiles || !suggestion.postApplyHashes) {
+    return {
+      ok: false as const,
+      error: {
+        code: "INVALID_PATCH" as const,
+        message: "Undo snapshot is unavailable",
+      },
+    };
   }
-
-  const result = await undoPatchSet({
-    files,
-    previousFiles: suggestion.previousFiles,
-    postApplyHashes: suggestion.postApplyHashes,
-  });
-  if (!result.ok) {
-    return { ok: false, reason: result.error.message };
-  }
-  return { ok: true, files: result.files };
+  return undoPatchSet(files, suggestion.previousFiles, suggestion.postApplyHashes);
 }
 
 export function withSuggestionStatus(
   messages: ChatMessage[],
-  messageId: string,
-  patch: Partial<NonNullable<ChatMessage["suggestion"]>>,
+  id: string,
+  patch: Partial<ChatSuggestion>,
 ): ChatMessage[] {
-  return messages.map((m) => {
-    if (m.id !== messageId || !m.suggestion) return m;
-    return {
-      ...m,
-      suggestion: { ...m.suggestion, ...patch },
-    };
-  });
-}
-
-/** @deprecated basename guessing — kept only for tests of legacy helpers if any */
-export function resolveSuggestionTarget(
-  suggestion: { title?: string; path?: string; body?: string },
-  files: Record<string, string>,
-): string | undefined {
-  const keys = Object.keys(files);
-  if (!keys.length) return undefined;
-  const explicit = suggestion.path?.replace(/\\/g, "/").replace(/^\.\//, "");
-  if (explicit && explicit in files) return explicit;
-  return undefined;
+  return messages.map((message) =>
+    message.id === id && message.suggestion
+      ? { ...message, suggestion: { ...message.suggestion, ...patch } }
+      : message,
+  );
 }

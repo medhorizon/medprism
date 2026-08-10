@@ -10,7 +10,8 @@ import {
   createProjectFromBundledTemplate,
   deleteProject,
   ensureDemoProject,
-  loadProjects,
+  getLastProjectStoreError,
+  loadProjectsResult,
   migrateLocalProjects,
   renameProject,
   type Project,
@@ -38,9 +39,16 @@ export function ProjectsPage() {
   const templates = useMemo(() => listOfficialTemplates(), []);
   const [auth, setAuth] = useState<AuthState>(() => loadAuth());
   const [projects, setProjects] = useState<Project[]>(() => {
-    migrateLocalProjects();
-    ensureDemoProject();
-    return loadProjects();
+    const migration = migrateLocalProjects();
+    if (migration.ok) {
+      try {
+        ensureDemoProject();
+      } catch {
+        // The typed storage error is surfaced once state has initialized.
+      }
+    }
+    const loaded = loadProjectsResult();
+    return loaded.ok ? loaded.value : [];
   });
   const [pickerOpen, setPickerOpen] = useState(false);
   const [selectedTemplate, setSelectedTemplate] = useState<OfficialTemplateSpec>(templates[0]);
@@ -53,6 +61,10 @@ export function ProjectsPage() {
   const [providerOpen, setProviderOpen] = useState(false);
   const [signOutOpen, setSignOutOpen] = useState(false);
 
+  useEffect(() => {
+    const storageError = getLastProjectStoreError();
+    if (storageError) setError(storageError.message);
+  }, []);
   useEffect(() => {
     if (auth.status !== "guest") return;
     const setup = searchParams.get("setup");
@@ -71,7 +83,14 @@ export function ProjectsPage() {
   }, [auth.status, searchParams, setSearchParams]);
 
   function refresh() {
-    setProjects(loadProjects());
+    const loaded = loadProjectsResult();
+    if (!loaded.ok) {
+      setError(loaded.error.message);
+      return false;
+    }
+    setProjects(loaded.value);
+    setError(null);
+    return true;
   }
 
   function openPicker() {
@@ -96,10 +115,10 @@ export function ProjectsPage() {
         templateId: selectedTemplate.id,
       });
       if (!project) {
-        setError(t("templates.failCreate"));
+        setError(getLastProjectStoreError()?.message ?? t("templates.failCreate"));
         return;
       }
-      refresh();
+      if (!refresh()) return;
       closePicker();
       navigate(`/p/${project.id}`);
     } catch (e) {
@@ -116,15 +135,28 @@ export function ProjectsPage() {
 
   function saveRename() {
     if (!renameTarget) return;
-    renameProject(renameTarget.id, renameValue);
+    const renamed = renameProject(renameTarget.id, renameValue);
+    if (!renamed) {
+      setError(getLastProjectStoreError()?.message ?? "Project rename failed");
+      return;
+    }
     setRenameTarget(null);
     refresh();
   }
 
   function confirmDelete() {
     if (!deleteTarget) return;
-    deleteProject(deleteTarget.id);
-    ensureDemoProject();
+    const deleted = deleteProject(deleteTarget.id);
+    if (!deleted.ok) {
+      setError(deleted.error.message);
+      return;
+    }
+    try {
+      ensureDemoProject();
+    } catch {
+      setError(getLastProjectStoreError()?.message ?? "Demo project recovery failed");
+      return;
+    }
     setDeleteTarget(null);
     refresh();
   }
@@ -182,6 +214,9 @@ export function ProjectsPage() {
         </div>
         <p className="shell-copy">{t("projects.copy")}</p>
         <p className="shell-status">{statusText}</p>
+        {error && !pickerOpen && (
+          <p className="template-error" role="alert">{error}</p>
+        )}
         {auth.status === "authenticated" && (
           <p className="shell-status">{t("projects.hostedApiHint")}</p>
         )}

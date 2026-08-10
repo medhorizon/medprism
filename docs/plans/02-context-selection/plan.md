@@ -1,6 +1,6 @@
 # P02 — activeFile / Selection 上下文接线
 
-**Status:** ⬜ Not started  
+**Status:** 🟨 Implemented; repository verification pending
 **Priority:** P0  
 **Depends on:** 可独立开发；与 P01 联调后才形成可靠编辑闭环  
 **Blocks:** P05 Citation、P06 Compile-Fix、writing/polish 的“只改这段”

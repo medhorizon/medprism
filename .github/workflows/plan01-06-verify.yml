@@ -1,0 +1,33 @@
+name: Plan01-06 verification
+
+on:
+  push:
+    branches:
+      - cursor/plan06-skill-routing
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm run lint
+      - name: Check Electron and server JavaScript syntax
+        run: |
+          find electron server shared -type f \( -name '*.mjs' -o -name '*.cjs' \) -print0 \
+            | xargs -0 -n1 node --check
+      - name: Verify packaging, syntax, and clean diff
+        run: python3 scripts/verify_plan01_06.py --skip-npm --skip-lint

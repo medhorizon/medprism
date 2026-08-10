@@ -76,7 +76,8 @@ export const env = {
   newApiAccessToken: (process.env.NEWAPI_ACCESS_TOKEN || "").trim(),
   /** Must be numeric user id matching the access token owner */
   newApiUserId: (process.env.NEWAPI_USER_ID || "").trim(),
-  newApiTokenQuota: num("NEWAPI_TOKEN_QUOTA", 2000),
+  /** Per-registration NewAPI token quota (default 200). */
+  newApiTokenQuota: num("NEWAPI_TOKEN_QUOTA", 200),
   upstreamBaseUrl: (process.env.UPSTREAM_BASE_URL || "").trim(),
   upstreamApiKey: (process.env.UPSTREAM_API_KEY || "").trim(),
   dataDir: join(root, "data"),

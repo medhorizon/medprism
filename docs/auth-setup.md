@@ -54,7 +54,7 @@ Never commit real keys. If a key was pasted into chat or a ticket, rotate it in 
 
 On successful OTP verify, auth server:
 
-1. Creates (or reuses) a NewAPI token named by the user email (`remain_quota=2000`, never expires)
+1. Creates (or reuses) a NewAPI token named by the user email (`remain_quota=200` by default, never expires)
 2. Reveals the full key via `POST /api/token/batch/keys`
 3. Returns `hosted.baseUrl` + `hosted.apiKey` for MedPrism auto-config
 4. Issues a `refreshToken` (stored in browser `localStorage`) for passwordless re-login
@@ -65,7 +65,7 @@ NEWAPI_BASE_URL=https://newapi.medhorizon.icu
 NEWAPI_PUBLIC_BASE_URL=https://newapi.medhorizon.icu/v1
 NEWAPI_ACCESS_TOKEN=...
 NEWAPI_USER_ID=1          # numeric id matching the access token owner
-NEWAPI_TOKEN_QUOTA=2000
+NEWAPI_TOKEN_QUOTA=200
 ```
 
 `POST /auth/refresh` with `{ refreshToken }` returns the same hosted credentials without OTP.

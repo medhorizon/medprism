@@ -50,24 +50,13 @@ export function resolveLlmConfig(): LlmConfig {
 
   const auth = loadAuth();
   if (auth.status === "authenticated") {
-    // Prefer auth /v1 proxy with the session access token. The auth server then
-    // forwards with the user's NewAPI key (no global UPSTREAM_* required).
-    const authBase = (
-      import.meta.env.VITE_AUTH_BASE_URL as string | undefined
-    )?.replace(/\/+$/, "");
-    if (authBase && auth.accessToken) {
-      return {
-        mode: "hosted",
-        baseUrl: `${authBase}/v1`,
-        apiKey: auth.accessToken,
-        model: auth.hosted.model || "deepseek-v4-flash",
-      };
-    }
+    // Use login-issued hosted credentials (usually direct NewAPI).
+    // Auth /v1 proxy is only used when the server explicitly returned that baseUrl.
     return {
       mode: "hosted",
       baseUrl: auth.hosted.baseUrl,
       apiKey: auth.hosted.apiKey,
-      model: auth.hosted.model,
+      model: auth.hosted.model || "deepseek-v4-flash",
     };
   }
 

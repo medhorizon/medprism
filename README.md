@@ -2,43 +2,43 @@
 
 Medical scientific writing workspace inspired by OpenAI Prism (graphite-on-paper UI, Assistant card under Source).
 
-## Download (v1.2.0)
+## Download (v1.3.0)
 
-Prebuilt desktop apps: [GitHub Releases](https://github.com/medhorizon/medprism/releases/tag/v1.2.0)
+Prebuilt desktop apps: [GitHub Releases](https://github.com/medhorizon/medprism/releases/tag/v1.3.0)
 
 | Platform | Artifact |
 |---|---|
-| Windows x64 | `MedPrism-1.2.0-win64-portable.exe` |
-| Linux x64 | `MedPrism-1.2.0-linux64.AppImage` |
-| macOS Apple Silicon | `MedPrism-1.2.0-macos-arm64.dmg` |
+| Windows x64 | `MedPrism-1.3.0-win64-portable.exe` |
+| Linux x64 | `MedPrism-1.3.0-linux64.AppImage` |
+| macOS Apple Silicon | `MedPrism-1.3.0-macos-arm64.dmg` |
 
 ## Run (development)
 
 ```bash
 npm install
-cp .env.example .env          # once — sets VITE_AUTH_BASE_URL
-npm run auth:server           # terminal 1 — email OTP + hosted proxy (port 8787)
-npm run dev                   # terminal 2 — UI
+cp .env.example .env          # once 鈥?sets VITE_AUTH_BASE_URL
+npm run auth:server           # terminal 1 鈥?email OTP + hosted proxy (port 8787)
+npm run dev                   # terminal 2 鈥?UI
 # optional:
 npm run compile:server        # local Tectonic
 # desktop shell (after `npm run dev` or against packaged dist):
 npm run electron:dev
 ```
 
-Auth: [docs/auth-setup.md](./docs/auth-setup.md) · Compile: [docs/compile-setup.md](./docs/compile-setup.md) · Real-auth plan: [PLAN01-REAL-AUTH.md](./PLAN01-REAL-AUTH.md) · V1 optimization plans: [docs/plans/](./docs/plans/README.md).
+Auth: [docs/auth-setup.md](./docs/auth-setup.md) 路 Compile: [docs/compile-setup.md](./docs/compile-setup.md) 路 Real-auth plan: [PLAN01-REAL-AUTH.md](./PLAN01-REAL-AUTH.md) 路 V1 optimization plans: [docs/plans/](./docs/plans/README.md).
 
 Routes:
 
-- `/login` — email verification-code login / guest
-- `/projects` — project list + API settings
-- `/p/:projectId` — workspace editor（Assistant：自然语言 +「审阅论文」芯片）
+- `/login` 鈥?email verification-code login / guest
+- `/projects` 鈥?project list + API settings
+- `/p/:projectId` 鈥?workspace editor锛圓ssistant锛氳嚜鐒惰瑷€ +銆屽闃呰鏂囥€嶈姱鐗囷級
 
 ## Directory
 
 ```text
 AGENTS.md                 # agent protocol (Plan4)
 PLAN.md / PLAN01-REAL-AUTH.md / PLAN08.md
-docs/plans/               # V1 executable optimization plans (MASTER + P01–P10)
+docs/plans/               # V1 executable optimization plans (MASTER + P01鈥揚10)
 templates/README.md       # template library docs
 prompts/                  # system / reply formats
 skills/                   # SKILL.md packages (Plan6/8)
@@ -59,12 +59,10 @@ src/
 
 ## Template library
 
-Projects → 从模板新建。官方包在 `templates/official/`。见 [templates/README.md](./templates/README.md)。
-
+Projects 鈫?浠庢ā鏉挎柊寤恒€傚畼鏂瑰寘鍦?`templates/official/`銆傝 [templates/README.md](./templates/README.md)銆?
 ## Language
 
-默认中文 UI；登录页 / 项目页 / 顶栏可切换 English（存 `localStorage`）。
-
+榛樿涓枃 UI锛涚櫥褰曢〉 / 椤圭洰椤?/ 椤舵爮鍙垏鎹?English锛堝瓨 `localStorage`锛夈€?
 ## Roadmap
 
-See [PLAN.md](./PLAN.md), [PLAN01.md](./PLAN01.md)（✅ 登录鉴权完成）, and [PLAN08.md](./PLAN08.md). Includes login/API config, PaperSearch citation tools, and local Tectonic compile fix loop.
+See [PLAN.md](./PLAN.md), [PLAN01.md](./PLAN01.md)锛堚渽 鐧诲綍閴存潈瀹屾垚锛? and [PLAN08.md](./PLAN08.md). Includes login/API config, PaperSearch citation tools, and local Tectonic compile fix loop.

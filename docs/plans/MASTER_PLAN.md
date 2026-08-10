@@ -1,8 +1,8 @@
 # MedPrism V1 优化总控计划
 
-> 目标仓库：`medhorizon/medprism`  
-> 目标分支基线：`cursor/plan06-skill-routing`  
-> 适用范围：本地 Science 写作、LaTeX 修改、引用、编译与 AI 辅助  
+> 目标仓库：`medhorizon/medprism`
+> 当前实施分支：`cursor/auth-registration-quota-200`（source snapshot `03dd0a4bc4e977f19e9b7c58c5ef845ec9868929`）
+> 适用范围：本地 Science 写作、LaTeX 修改、引用、编译与 AI 辅助
 > 本文只负责**统筹进度与依赖关系**。具体实现细节以各子目录的 `plan.md` 为准。
 
 ---
@@ -50,7 +50,7 @@ V1 是否成功，优先看这条链路是否可靠，而不是 Skill 数量或 
 | P04 | [localStorage 稳定性与真实导出](./04-localstorage-hardening/plan.md) | P1 | 无 | 🟨 Verification pending |
 | P05 | [Citation Workflow](./05-citation-workflow/plan.md) | P1 | P01、P02 | 🟨 Verification pending |
 | P06 | [Compile-Fix Workflow](./06-compile-fix-workflow/plan.md) | P1 | P01、P02、P03 | 🟨 Verification pending |
-| P07 | [Skill / Prompt / Router 收敛](./07-skill-prompt-workflows/plan.md) | P1 | P01、P02；可与 P05/P06 逐步联调 | ⬜ Not started |
+| P07 | [Skill / Prompt / Router 收敛](./07-skill-prompt-workflows/plan.md) | P1 | P01、P02；可与 P05/P06 逐步联调 | 🟨 Implemented — CI pending |
 | P08 | [快捷登录风险隔离](./08-quick-login-risk-control/plan.md) | P1 | 无 | ⬜ Not started |
 | P09 | [Electron 发布版清理](./09-packaged-app-cleanup/plan.md) | P1 | P03 | ⬜ Not started |
 | P10 | [测试、E2E 与 Release Gate](./10-testing-release-gates/plan.md) | P1 | 持续进行；最终依赖 P01–P09 | ⬜ Not started |
@@ -119,7 +119,7 @@ P10 从 P01 开始就持续补测试，最后再集中补 packaged E2E 和 relea
 
 - [ ] P05 Citation workflow。
 - [ ] P06 Compile-Fix workflow。
-- [ ] P07 writing/polish/review + Prompt/Router/Skill 收敛。
+- [x] P07 writing/polish/review + Prompt/Router/Skill 收敛（官方 npm/CI gate pending）。
 
 **里程碑验收：**
 

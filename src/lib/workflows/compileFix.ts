@@ -1,7 +1,14 @@
-import type { ContextSnapshot } from "../context/snapshot";
+import fixCompileSkill from "../../../skills/fix-compile-errors/SKILL.md?raw";
+import { buildContextSnapshot, type ContextSnapshot } from "../context/snapshot";
 import { parseModelPatchProposal, type ModelPatchProposal, type PatchSet, type SourceRange } from "../patch/schema";
 import { hydratePatchProposal } from "../patch/hydrate";
+import { validatePatchSet } from "../patch/validate";
+import { parseModelWorkflowEnvelope } from "../replyParse";
+import { taggedPromptData } from "../promptData";
+import { firstRootCompileError } from "../../tools/parseCompileLog";
 import type { CompileLogError } from "../../tools/types";
+import { buildWorkflowSystemPrompt } from "./prompt";
+import { emptyAgentResult, type WorkflowHandler, type WorkflowResult } from "./types";
 
 export type CompileFixPreparation =
   | {
@@ -85,14 +92,21 @@ export function prepareCompileFix(
     sourceContext: window.text,
     sourceRange: window.range,
     prompt: [
-      "Repair exactly one root LaTeX compilation error.",
-      "Return a JSON patchProposal with exactly one minimal replace_text operation.",
-      "The oldText must be copied from the supplied source window.",
-      "Do not output hashes; the runtime attaches deterministic metadata.",
-      "Do not rewrite scientific prose unless required by the error.",
-      `Root diagnostic:\n${JSON.stringify(diagnostic, null, 2)}`,
-      `Target file: ${diagnostic.file}`,
-      `Source around the error:\n${window.text}`,
+      taggedPromptData(
+        "trusted_tool_results",
+        'source="compile"',
+        { rootDiagnostic: diagnostic },
+      ),
+      taggedPromptData(
+        "workspace_context",
+        'trust="untrusted-data"',
+        { targetFile: diagnostic.file, sourceAroundError: window.text },
+      ),
+      taggedPromptData(
+        "user_request",
+        "",
+        { text: "Repair exactly this one root LaTeX error with one minimal replace_text proposal." },
+      ),
     ].join("\n\n"),
   };
 }
@@ -151,7 +165,6 @@ export async function compileFixProposalToPatch(args: {
   };
   const proposal: ModelPatchProposal = {
     ...parsed.proposal,
-    verify: { compile: true },
     operations: [{ ...operation, path }],
   };
   const hydrated = await hydratePatchProposal(proposal, scopedSnapshot, {
@@ -164,3 +177,154 @@ export async function compileFixProposalToPatch(args: {
   }
   return { ok: true, patchSet: hydrated.patchSet };
 }
+
+
+function isCompileToolPayload(value: unknown): value is {
+  compileOk: boolean;
+  log: string;
+  pdfBase64?: string;
+  error?: string;
+} {
+  if (!value || typeof value !== "object") return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.compileOk === "boolean" && typeof record.log === "string";
+}
+
+function invalidCompileFixResult(
+  message: string,
+  content = "",
+  lastCompileLog?: string,
+): WorkflowResult {
+  return {
+    agent: emptyAgentResult(
+      "compile-fix",
+      "Compile-fix workflow did not produce an applicable patch",
+      [message],
+    ),
+    content: content || message,
+    toolNotes: [],
+    ...(lastCompileLog !== undefined ? { lastCompileLog } : {}),
+  };
+}
+
+export const runCompileFixWorkflow: WorkflowHandler = async (input) => {
+  const compiled = await input.services.runTool("compile", {}, input.ctx);
+  if (!compiled.ok) {
+    return invalidCompileFixResult(`编译失败：${compiled.error}`);
+  }
+  if (!isCompileToolPayload(compiled.data)) {
+    return invalidCompileFixResult("编译工具返回了无效结构。");
+  }
+
+  const { compileOk, log } = compiled.data;
+  if (compileOk) {
+    return {
+      agent: emptyAgentResult("compile-fix", "Project already compiles", []),
+      content: "当前项目编译成功，不需要生成修复补丁。",
+      toolNotes: ["compile:success"],
+      lastCompileLog: log,
+      ...(compiled.data.pdfBase64 ? { pdfBase64: compiled.data.pdfBase64 } : {}),
+    };
+  }
+  if (!log.trim()) {
+    return invalidCompileFixResult(
+      compiled.data.error || "编译失败，但没有可用于安全定位的日志。",
+      "",
+      log,
+    );
+  }
+
+  const diagnostic = firstRootCompileError(log);
+  if (!diagnostic?.file || !diagnostic.line) {
+    return invalidCompileFixResult(
+      "无法从编译日志中安全定位错误文件和行号；未猜测或修改任何文件。",
+      "",
+      log,
+    );
+  }
+  if (!(diagnostic.file in input.ctx.files)) {
+    return invalidCompileFixResult(
+      `编译日志指向项目外或未加载的文件：${diagnostic.file}；未修改其他文件。`,
+      "",
+      log,
+    );
+  }
+
+  let snapshot: ContextSnapshot;
+  try {
+    snapshot = await buildContextSnapshot({
+      ...input.ctx,
+      activeFile: diagnostic.file,
+      lastCompileLog: undefined,
+    });
+  } catch (error) {
+    return invalidCompileFixResult(
+      error instanceof Error ? error.message : String(error),
+      "",
+      log,
+    );
+  }
+  const prepared = prepareCompileFix(snapshot, diagnostic);
+  if (!prepared.ok) {
+    return invalidCompileFixResult(prepared.message, "", log);
+  }
+
+  const raw = await input.services.complete({
+    config: input.config,
+    messages: [
+      {
+        role: "system",
+        content: buildWorkflowSystemPrompt({
+          workflow: "compile-fix",
+          skillId: "fix-compile-errors",
+          skill: fixCompileSkill,
+        }),
+      },
+      { role: "user", content: prepared.prompt },
+    ],
+  });
+  const parsed = parseModelWorkflowEnvelope(raw, "compile-fix");
+  if (!parsed.ok) {
+    return invalidCompileFixResult(parsed.error.message, parsed.rawContent, log);
+  }
+  if (parsed.envelope.citationPlanValue !== undefined || parsed.envelope.reviewValue !== undefined) {
+    return invalidCompileFixResult(
+      "Compile-fix returned a payload owned by another workflow",
+      parsed.envelope.content,
+      log,
+    );
+  }
+  if (!parsed.envelope.proposal) {
+    return invalidCompileFixResult(
+      parsed.envelope.warnings.join(" ") || "模型没有提供可验证的修复补丁。",
+      parsed.envelope.content,
+      log,
+    );
+  }
+
+  const converted = await compileFixProposalToPatch({
+    rawProposal: parsed.envelope.proposal,
+    snapshot,
+    diagnostic,
+  });
+  if (!converted.ok) {
+    return invalidCompileFixResult(converted.message, parsed.envelope.content, log);
+  }
+  const validated = await validatePatchSet({ ...snapshot.files }, converted.patchSet);
+  if (!validated.ok) {
+    return invalidCompileFixResult(validated.error.message, parsed.envelope.content, log);
+  }
+
+  return {
+    agent: {
+      schemaVersion: "1",
+      workflow: "compile-fix",
+      summary: parsed.envelope.summary,
+      warnings: parsed.envelope.warnings,
+      patch: converted.patchSet,
+    },
+    content: parsed.envelope.content || "已根据首个根错误生成最小修复补丁。Keep 后只重新编译一次。",
+    toolNotes: ["compile:failed", "skill:fix-compile-errors"],
+    lastCompileLog: log,
+  };
+};

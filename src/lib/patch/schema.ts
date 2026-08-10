@@ -75,7 +75,6 @@ export type ModelPatchProposal = {
   schemaVersion: typeof PATCH_SCHEMA_VERSION;
   summary: string;
   operations: ModelEditProposal[];
-  verify?: { compile?: boolean };
 };
 
 export type FileSnapshot =
@@ -316,13 +315,35 @@ export function parseModelPatchProposal(value: unknown): ParseProposalResult {
   if (raw.operations.length > MAX_PATCH_OPERATIONS) {
     return invalidProposal(`Proposal exceeds ${MAX_PATCH_OPERATIONS} operations`);
   }
-  const compile = compileFlagFromContainer(raw.verify);
-  if (!compile.ok) return invalidProposal("verify.compile must be boolean");
+  const forbiddenProposalField = ["id", "projectRevision", "verify", "patch", "patchSet"].find(
+    (field) => raw[field] !== undefined,
+  );
+  if (forbiddenProposalField) {
+    return invalidProposal(
+      `Model patch proposals must not contain runtime-owned field ${forbiddenProposalField}`,
+    );
+  }
 
   try {
     const operations: ModelEditProposal[] = raw.operations.map((item, index) => {
       if (!item || typeof item !== "object") throw new Error(`operations[${index}] must be an object`);
       const op = item as Record<string, unknown>;
+      const forbiddenOperationField = [
+        "baseSha256",
+        "range",
+        "expectedOccurrences",
+        "entries",
+        "mustNotExist",
+        "citeKey",
+        "bibtex",
+        "doi",
+        "pmid",
+      ].find((field) => op[field] !== undefined);
+      if (forbiddenOperationField) {
+        throw new Error(
+          `Model edit operation must not contain runtime-owned field ${forbiddenOperationField}`,
+        );
+      }
       const optionalPath = op.path === undefined ? undefined : checkedPath(op.path);
       if (op.path !== undefined && !optionalPath) {
         throw new UnsafeProjectPathError(String(op.path), "invalid project path");
@@ -351,7 +372,6 @@ export function parseModelPatchProposal(value: unknown): ParseProposalResult {
         schemaVersion: PATCH_SCHEMA_VERSION,
         summary: raw.summary,
         operations,
-        ...(compile.value === undefined ? {} : { verify: { compile: compile.value } }),
       },
     };
   } catch (error) {

@@ -1,20 +1,22 @@
 ---
 name: fix-compile-errors
-description: Diagnose LaTeX compile failures and apply minimal patches. Use when compile fails, Fix with AI is clicked, or the user mentions log warnings.
+description: Diagnose one supplied LaTeX root error and propose one minimal source replacement.
 ---
 
 # Fix compile errors
 
-## Workflow
+## Responsibility
 
-1. Read structured errors from `parse_compile_log` (and raw log if provided).
-2. Locate the responsible file/line in the project context.
-3. Propose a **minimal** suggestion patch for that file only.
-4. Do not rewrite unrelated sections.
-5. After the user Keeps the patch, the workspace may recompile (tools mode, max 2 retries).
+1. Use only the supplied root diagnostic and nearby source window.
+2. Propose exactly one minimal `replace_text` operation for the diagnosed file.
+3. Copy `oldText` exactly from the source window.
+4. Preserve scientific prose unless the compilation error directly requires a change.
 
-## Output
+## Forbidden
 
-- Short diagnosis in chat.
-- One `suggestion` fence with correct `path` matching a project file.
-- Prefer fixing unmatched environments, missing braces, and typos called out by the log.
+- Do not inspect or rewrite unrelated files.
+- Do not repair secondary warnings in the same response.
+- Do not output hashes, revisions, a complete PatchSet, or suggestion fences.
+- Do not append text to the file end.
+
+The runtime validates the proposal, binds it to the diagnosed path, and compiles once after the user Keeps it.

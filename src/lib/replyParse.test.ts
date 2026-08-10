@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { parseAssistantReply, parseProposalEnvelope } from "./replyParse";
+import {
+  parseAssistantReply,
+  parseModelWorkflowEnvelope,
+  parseProposalEnvelope,
+} from "./replyParse";
 
 describe("assistant reply parsing", () => {
   it("accepts a model patch proposal without runtime hashes", () => {
@@ -44,4 +48,70 @@ describe("assistant reply parsing", () => {
     );
     expect(parsed.suggestions[0]?.legacyDisplayOnly).toBe(true);
   });
+  it("rejects a hydrated PatchSet and mismatched workflow in the Plan07 envelope", () => {
+    const hydrated = parseModelWorkflowEnvelope(JSON.stringify({
+      schemaVersion: "1",
+      workflow: "writing",
+      summary: "unsafe",
+      warnings: [],
+      patch: { schemaVersion: "1" },
+    }), "writing");
+    expect(hydrated.ok).toBe(false);
+
+    const mismatch = parseModelWorkflowEnvelope(JSON.stringify({
+      schemaVersion: "1",
+      workflow: "review",
+      summary: "wrong workflow",
+      warnings: [],
+      review: { findings: [] },
+    }), "writing");
+    expect(mismatch.ok).toBe(false);
+  });
+
+  it("rejects multiple typed payloads instead of guessing which one to keep", () => {
+    const parsed = parseModelWorkflowEnvelope(JSON.stringify({
+      schemaVersion: "1",
+      workflow: "review",
+      summary: "ambiguous",
+      warnings: [],
+      review: { findings: [] },
+      citationPlan: { candidates: [] },
+    }), "review");
+    expect(parsed.ok).toBe(false);
+  });
+
+  it("rejects runtime-owned metadata inside a model patch proposal", () => {
+    const withHash = parseModelWorkflowEnvelope(JSON.stringify({
+      schemaVersion: "1",
+      workflow: "writing",
+      summary: "unsafe metadata",
+      warnings: [],
+      patchProposal: {
+        schemaVersion: "1",
+        summary: "unsafe",
+        operations: [{
+          op: "replace_text",
+          oldText: "old",
+          newText: "new",
+          baseSha256: "a".repeat(64),
+        }],
+      },
+    }), "writing");
+    expect(withHash.ok).toBe(false);
+
+    const withCompilePolicy = parseModelWorkflowEnvelope(JSON.stringify({
+      schemaVersion: "1",
+      workflow: "writing",
+      summary: "unsafe policy",
+      warnings: [],
+      patchProposal: {
+        schemaVersion: "1",
+        summary: "unsafe",
+        verify: { compile: true },
+        operations: [{ op: "replace_text", oldText: "old", newText: "new" }],
+      },
+    }), "writing");
+    expect(withCompilePolicy.ok).toBe(false);
+  });
+
 });

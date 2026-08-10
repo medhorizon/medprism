@@ -8,6 +8,7 @@ import { ResizeHandle } from "../components/ResizeHandle";
 import { SourcePane } from "../components/SourcePane";
 import { Topbar } from "../components/Topbar";
 import { runAssistant } from "../lib/assistantRuntime";
+import type { WorkflowKind } from "../lib/workflows/types";
 import { compileProject } from "../lib/compileClient";
 import { projectRevision } from "../lib/patch/revision";
 import { downloadProjectZip } from "../lib/exportZip";
@@ -335,7 +336,7 @@ export function WorkspacePage() {
     return t("assistant.errorNetwork");
   }
 
-  async function send(text: string) {
+  async function send(text: string, explicitWorkflow?: WorkflowKind) {
     const prompt = text.trim();
     const current = projectRef.current;
     if (!prompt || sending || !current) return;
@@ -382,7 +383,7 @@ export function WorkspacePage() {
         config,
         userText: forceReview ? t("assistant.review.q1") : prompt,
         history,
-        intent: forceReview ? "review" : "auto",
+        workflow: explicitWorkflow ?? (forceReview ? "review" : "auto"),
         ctx: {
           projectId: requestProject.id,
           files: { ...requestProject.files },
@@ -537,7 +538,7 @@ export function WorkspacePage() {
 
   function fixWithAi() {
     setAiOpen(true);
-    void send(demo ? t("assistant.demo.q4") : t("assistant.q4"));
+    void send(demo ? t("assistant.demo.q4") : t("assistant.q4"), "compile-fix");
   }
 
   if (!project) {

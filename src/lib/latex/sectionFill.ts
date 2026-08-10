@@ -29,7 +29,7 @@ type HeadingAlias = {
 };
 
 /** Known manuscript labels that users paste with ready-to-apply prose. */
-const HEADING_ALIASES: HeadingAlias[] = [
+const HEADING_ALIASES_UNSORTED: HeadingAlias[] = [
   { kind: "funding", alias: "funding information" },
   { kind: "funding", alias: "financial support" },
   { kind: "funding", alias: "funding" },
@@ -99,7 +99,11 @@ const HEADING_ALIASES: HeadingAlias[] = [
   { kind: "conclusion", alias: "结论" },
   { kind: "keywords", alias: "keywords" },
   { kind: "keywords", alias: "关键词" },
-].sort((a, b) => b.alias.length - a.alias.length);
+];
+
+const HEADING_ALIASES: HeadingAlias[] = [...HEADING_ALIASES_UNSORTED].sort(
+  (a, b) => b.alias.length - a.alias.length,
+);
 
 const INSTRUCTION_BODY_RE =
   /^(?:请|帮我|麻烦|先)?\s*(?:写|撰写|起草|生成|准备|完善|补充|修改|润色|更新|draft|write|prepare|compose|revise|polish)\b/i;

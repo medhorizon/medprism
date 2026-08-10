@@ -1,8 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { buildContextSnapshot } from "./snapshot";
+import { buildContextSnapshot, formatWorkspaceContext } from "./snapshot";
 import { hydratePatchProposal } from "../patch/hydrate";
 
 describe("context snapshot", () => {
+  it("includes optional project memory notes in workspace context", async () => {
+    const snapshot = await buildContextSnapshot({
+      projectId: "p",
+      files: { "main.tex": "\\begin{document}\\end{document}" },
+      activeFile: "main.tex",
+      memoryNotes: "  Prefer cohort wording  ",
+    });
+    expect(snapshot.memoryNotes).toBe("Prefer cohort wording");
+    expect(formatWorkspaceContext(snapshot)).toContain("projectMemoryNotes");
+    expect(formatWorkspaceContext(snapshot)).toContain("Prefer cohort wording");
+  });
+
   it("computes selected text from the active file, including surrogate pairs", async () => {
     const snapshot = await buildContextSnapshot({
       projectId: "p",

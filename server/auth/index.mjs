@@ -35,7 +35,10 @@ async function sessionPayload(user) {
     },
     accessToken,
     refreshToken,
-    hosted: publicHostedCredentials(ensured.apiKey),
+    hosted: publicHostedCredentials({
+      apiKey: ensured.apiKey,
+      accessToken,
+    }),
   };
 }
 
@@ -177,7 +180,26 @@ const server = http.createServer(async (req, res) => {
         return;
       }
       const body = await readJson(req);
-      await proxyChatCompletions(req, res, body);
+      let userApiKey = session.user.newapi_api_key || "";
+      if (!userApiKey) {
+        try {
+          const ensured = await ensureUserNewApiKey(session.user);
+          userApiKey = ensured.apiKey || "";
+        } catch (error) {
+          sendJson(res, 503, {
+            error: {
+              message:
+                error instanceof Error
+                  ? error.message
+                  : "Failed to resolve NewAPI credentials",
+              type: "upstream_not_configured",
+              code: "upstream_not_configured",
+            },
+          });
+          return;
+        }
+      }
+      await proxyChatCompletions(req, res, body, userApiKey);
       return;
     }
 

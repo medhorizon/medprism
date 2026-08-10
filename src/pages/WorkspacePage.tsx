@@ -319,8 +319,16 @@ export function WorkspacePage() {
         return t("assistant.errorNetwork");
       }
       if (error.code === "bad_response") return t("assistant.errorBadResponse");
-      if (error.status === 503 || /upstream_not_configured/i.test(error.message)) {
+      if (
+        /upstream_not_configured/i.test(error.message) ||
+        /"code"\s*:\s*"upstream_not_configured"/i.test(error.message)
+      ) {
         return t("assistant.errorUpstream");
+      }
+      if (error.status === 503) {
+        return t("assistant.errorHttp", {
+          detail: error.message || "HTTP 503",
+        });
       }
       return t("assistant.errorHttp", { detail: error.message });
     }

@@ -101,7 +101,15 @@ export async function ensureNewApiTokenForEmail(email) {
   };
 }
 
-export function publicHostedCredentials(apiKey) {
+/** Build hosted credentials for the MedPrism client. */
+export function publicHostedCredentials({ apiKey, accessToken }) {
+  if (env.hostedProxyBaseUrl && accessToken) {
+    return {
+      baseUrl: env.hostedProxyBaseUrl,
+      apiKey: accessToken,
+      model: env.hostedDefaultModel,
+    };
+  }
   return {
     baseUrl: env.newApiPublicBaseUrl,
     apiKey,

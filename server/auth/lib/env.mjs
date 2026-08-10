@@ -61,12 +61,18 @@ export const env = {
   hostedDefaultModel: process.env.HOSTED_DEFAULT_MODEL || "deepseek-v4-flash",
   /** NewAPI management root, e.g. https://newapi.medhorizon.icu */
   newApiBaseUrl: (process.env.NEWAPI_BASE_URL || "").replace(/\/+$/, ""),
-  /** Public OpenAI-compatible base for MedPrism clients */
+  /**
+   * Public OpenAI-compatible base for direct client→NewAPI calls.
+   * Do not point this at the auth server itself.
+   */
   newApiPublicBaseUrl: (
-    process.env.NEWAPI_PUBLIC_BASE_URL ||
-    process.env.HOSTED_BASE_URL ||
-    "http://localhost:8787/v1"
+    process.env.NEWAPI_PUBLIC_BASE_URL || "https://newapi.medhorizon.icu/v1"
   ).replace(/\/+$/, ""),
+  /**
+   * Optional auth-side proxy base returned to clients (apiKey = accessToken).
+   * When set, MedPrism should call this instead of NewAPI directly.
+   */
+  hostedProxyBaseUrl: (process.env.HOSTED_BASE_URL || "").replace(/\/+$/, ""),
   newApiAccessToken: (process.env.NEWAPI_ACCESS_TOKEN || "").trim(),
   /** Must be numeric user id matching the access token owner */
   newApiUserId: (process.env.NEWAPI_USER_ID || "").trim(),

@@ -4,6 +4,8 @@ import {
   loadBundledOfficialTemplate,
   type ExtractedOfficialTemplate,
 } from "../templates";
+import { clearProjectArtifacts } from "./projectArtifacts";
+import { clearSessionChat } from "./projectChatSession";
 import {
   PROJECT_SCHEMA_VERSION,
   ProjectStore,
@@ -86,7 +88,12 @@ export function restoreProjectFromRecovery(id: string): StoreResult<Project> {
 }
 
 export function deleteProject(id: string): StoreResult<void> {
-  return remember(store().deleteProject(id));
+  const result = remember(store().deleteProject(id));
+  if (result.ok) {
+    clearProjectArtifacts(id);
+    clearSessionChat(id);
+  }
+  return result;
 }
 
 export function renameProject(id: string, title: string): Project | null {

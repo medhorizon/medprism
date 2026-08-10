@@ -1,5 +1,6 @@
 import academicPaperReviewerSkill from "../../../skills/academic-paper-reviewer/SKILL.md?raw";
 import { assertSafeProjectRelativePath } from "../projectPath";
+import { MAX_PROJECT_MEMORY_CHARS } from "../projectMemory";
 import { taggedPromptData } from "../promptData";
 import { compactPaperHits } from "../research/service";
 import { parseModelWorkflowEnvelope } from "../replyParse";
@@ -93,9 +94,15 @@ export function collectReviewContext(
   }
   if (!files.length) limitations.push("No reviewable LaTeX or bibliography files were supplied.");
 
+  const memoryNotes = input.ctx.memoryNotes?.replace(/\r\n?/g, "\n").trim();
   return {
     prompt: [
-      taggedPromptData("review_context", 'trust="untrusted-data"', { files }),
+      taggedPromptData("review_context", 'trust="untrusted-data"', {
+        files,
+        ...(memoryNotes
+          ? { projectMemoryNotes: memoryNotes.slice(0, MAX_PROJECT_MEMORY_CHARS) }
+          : {}),
+      }),
       taggedPromptData("user_request", "", { text: input.request.userText }),
     ].join("\n\n"),
     coverage: {
@@ -245,7 +252,7 @@ export const runReviewWorkflow: WorkflowHandler = async (input) => {
             ),
           }]
         : []),
-      ...input.history.slice(-6),
+      ...input.history,
       { role: "user", content: reviewContext.prompt },
     ],
   });

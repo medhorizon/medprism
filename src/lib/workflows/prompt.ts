@@ -6,6 +6,7 @@ import citationInstruction from "../../../prompts/workflows/citation.md?raw";
 import latexInstruction from "../../../prompts/workflows/latex.md?raw";
 import compileFixInstruction from "../../../prompts/workflows/compile-fix.md?raw";
 import reviewInstruction from "../../../prompts/workflows/review.md?raw";
+import adviceInstruction from "../../../prompts/workflows/advice.md?raw";
 import researchCapability from "../../../prompts/capabilities/research.md?raw";
 import latexOutputCapability from "../../../prompts/capabilities/latex-output.md?raw";
 import type { WorkflowKind } from "./types";
@@ -18,6 +19,7 @@ const WORKFLOW_INSTRUCTIONS: Record<WorkflowKind, string> = {
   latex: latexInstruction,
   "compile-fix": compileFixInstruction,
   review: reviewInstruction,
+  advice: adviceInstruction,
 };
 
 const CAPABILITY_INSTRUCTIONS = {

@@ -29,6 +29,8 @@ export type ChatMessage = {
   role: ChatRole;
   content: string;
   suggestion?: ChatSuggestion | undefined;
+  /** True while an assistant reply is in flight; never persist as a finished answer. */
+  pending?: boolean | undefined;
 };
 
 export type ProjectFile = {

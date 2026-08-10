@@ -3,11 +3,13 @@ import type {
   LlmConfig,
 } from "./llmClient";
 import {
+  applyRuntimeScaffoldGuard,
   detectSkillIntent,
   routeWorkflow,
   type SkillIntent,
   type WorkflowRoute,
 } from "./skillRouter";
+import { classifyWorkflowKind } from "./workflowClassifier";
 import { enrichSuggestion } from "./suggestions";
 import { executeWorkflow } from "./workflows/executor";
 import type {
@@ -34,6 +36,10 @@ export type RuntimeRequest = {
   workflow?: "auto" | WorkflowKind;
   /** Deprecated compatibility input; mapped to a WorkflowKind by the router. */
   intent?: "auto" | SkillIntent | "general";
+  /** Incremental token callback for streaming UI. */
+  onDelta?: (delta: string) => void;
+  /** Cancel in-flight model calls when the user switches project or leaves. */
+  signal?: AbortSignal;
 };
 
 export type RuntimeResult = {
@@ -89,16 +95,46 @@ export async function runAssistant(req: RuntimeRequest): Promise<RuntimeResult> 
     : req.mode === "review"
       ? "review"
       : undefined;
-  const route = routeWorkflow({
+  let route = routeWorkflow({
     text: req.userText,
     ...(explicitWorkflow ? { explicitWorkflow } : {}),
     ...(req.intent !== undefined ? { legacyIntent: req.intent } : {}),
   });
+  const routeLocked = route.source === "ui" || route.source === "command";
+  let routeNote = `route:${route.source}:${route.kind}`;
+
+  if (route.needsLlmClassification) {
+    const classified = await classifyWorkflowKind({
+      config: req.config,
+      userText: req.userText,
+      history: req.history,
+      ...(req.signal ? { signal: req.signal } : {}),
+    });
+    route = routeWorkflow({
+      text: req.userText,
+      explicitWorkflow: classified.kind,
+    });
+    routeNote = `route:llm:${classified.kind}:${classified.source}`;
+  }
+
+  // Classifier may label blank-shell prep as advice/polish; runtime still owns scaffolding.
+  const guarded = applyRuntimeScaffoldGuard({
+    route,
+    userText: req.userText,
+    locked: routeLocked,
+  });
+  route = guarded.route;
+  if (guarded.overridden) {
+    routeNote = `${routeNote}+runtime:scaffold(from:${guarded.fromKind})`;
+  }
+
   const result = await executeWorkflow({
     request: workflowRequestFromRuntime(req, route),
     config: req.config,
     history: req.history,
     ctx: req.ctx,
+    ...(req.onDelta ? { onDelta: req.onDelta } : {}),
+    ...(req.signal ? { signal: req.signal } : {}),
   });
 
   const suggestions: ChatSuggestion[] = [];
@@ -114,7 +150,7 @@ export async function runAssistant(req: RuntimeRequest): Promise<RuntimeResult> 
     suggestions,
     toolNotes: [
       ...result.toolNotes,
-      `route:${route.source}:${route.kind}`,
+      routeNote,
     ],
     ...(result.lastCompileLog !== undefined
       ? { lastCompileLog: result.lastCompileLog }
@@ -128,6 +164,7 @@ export function detectIntent(text: string): SkillIntent {
   return detectSkillIntent(text);
 }
 
+/** Legacy helper: natural language no longer binds a final kind without classification. */
 export function detectWorkflow(text: string): WorkflowKind {
   return routeWorkflow({ text }).kind;
 }

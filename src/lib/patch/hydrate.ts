@@ -1,6 +1,7 @@
 import { assertSafeProjectRelativePath } from "../projectPath";
 import type { ContextSnapshot } from "../context/snapshot";
 import { sha256Hex } from "./hash";
+import { resolveInsertPlacement } from "./insertAnchor";
 import type {
   EditOperation,
   ModelPatchProposal,
@@ -93,11 +94,30 @@ export async function hydratePatchProposal(
         },
       };
     }
+    const placement = resolveInsertPlacement({
+      source: content,
+      text: proposed.text,
+      preferredAnchor: proposed.anchor,
+      ...(proposed.targetKind ? { targetKind: proposed.targetKind } : {}),
+      proposedOp: proposed.op,
+    });
+    if (!placement) {
+      return {
+        ok: false,
+        error: {
+          code: "ANCHOR_NOT_FOUND",
+          message:
+            "Could not locate a correct insert position for this structural edit",
+          operationIndex: index,
+          path,
+        },
+      };
+    }
     operations.push({
-      op: proposed.op,
+      op: placement.op,
       path,
       baseSha256,
-      anchor: proposed.anchor,
+      anchor: placement.anchor,
       text: proposed.text,
       expectedOccurrences: 1,
     });

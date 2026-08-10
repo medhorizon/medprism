@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  extractJsonValue,
   parseAssistantReply,
   parseModelWorkflowEnvelope,
   parseProposalEnvelope,
@@ -149,6 +150,38 @@ describe("assistant reply parsing", () => {
     if (!parsed.ok) return;
     expect(parsed.envelope.proposal).toBeUndefined();
     expect(parsed.envelope.content).toBe("A normal user-facing paragraph.");
+  });
+
+  it("tolerates GPT-style trailing commas in workflow JSON", () => {
+    const raw = `{
+  "schemaVersion": "1",
+  "workflow": "advice",
+  "summary": "Template gaps",
+  "warnings": [],
+  "content": "Add competing interests and data availability.",
+}`;
+    const value = extractJsonValue(raw) as Record<string, unknown>;
+    expect(value.workflow).toBe("advice");
+    const parsed = parseModelWorkflowEnvelope(raw, "advice");
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.envelope.content).toContain("competing interests");
+  });
+
+  it("accepts numeric schemaVersion 1 from GPT-style JSON", () => {
+    const parsed = parseModelWorkflowEnvelope(
+      JSON.stringify({
+        schemaVersion: 1,
+        workflow: "advice",
+        summary: "ok",
+        warnings: [],
+        content: "Hello",
+      }),
+      "advice",
+    );
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.envelope.schemaVersion).toBe("1");
   });
 
   it("accepts a single writingDraft payload for runtime-owned target insertion", () => {

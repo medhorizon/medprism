@@ -104,6 +104,15 @@ export function validateCompileRequest(request) {
   };
 }
 
+const BINARY_FILE_PREFIX = "medprism-binary/v1;base64,";
+
+function fileBufferForCompile(content) {
+  if (typeof content === "string" && content.startsWith(BINARY_FILE_PREFIX)) {
+    return Buffer.from(content.slice(BINARY_FILE_PREFIX.length), "base64");
+  }
+  return Buffer.from(content, "utf8");
+}
+
 async function writeTextProject(root, files) {
   const rootResolved = path.resolve(root);
   for (const [rel, content] of Object.entries(files)) {
@@ -113,7 +122,7 @@ async function writeTextProject(root, files) {
       throw new CompileServiceError("UNSAFE_PATH", `Path escaped project root: ${safe}`);
     }
     await fs.mkdir(path.dirname(full), { recursive: true });
-    await fs.writeFile(full, content, "utf8");
+    await fs.writeFile(full, fileBufferForCompile(content));
   }
 }
 

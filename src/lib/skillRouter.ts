@@ -5,6 +5,7 @@
  * optional research before it, and optional LaTeX application after it.
  * This remains a linear product workflow, not a general planner or DAG.
  */
+import { isBlankScaffoldIntent } from "./latex/scaffoldModules";
 import type { LatexTargetSpec } from "./latex/types";
 import type { ResearchPurpose, ResearchSpec } from "./research/types";
 import type { WorkflowKind, WorkflowPlan } from "./workflows/types";
@@ -38,8 +39,9 @@ const COMPILE_RE =
   /compile|编译|tectonic|fix with ai|latex\s*log|undefined control sequence|missing\s+[}\]]|错误日志|编译错误|编译失败/i;
 const REVIEW_RE =
   /peer\s*review|referee|manuscript review|editorial (decision|review)|审阅论文|审阅|审稿|评审意见|同行评议|挑毛病|批判性审|模拟审稿|review (this |my )?(paper|manuscript)|critique (this |my )?(paper|manuscript)|帮我审|审查这篇/i;
+/** True citation actions — not checklist mentions of “参考文献” in submission prep. */
 const CITATION_RE =
-  /cite|citation|引用|参考文献|bibtex|pmid|doi|分段引用|补引用|加引用|添加引用|插入引用|找文献(?:支撑|支持)|配文献|支撑文献/i;
+  /(?:\bcite\b|\bcitation\b|分段引用|补引用|加引用|添加引用|插入引用|找文献(?:支撑|支持)|配文献|支撑文献|(?:补|加|插入|添加)\s*(?:一下|几个|两篇|几篇)?\s*(?:引用|参考文献)|(?:引用|参考文献).{0,8}(?:补|加|插入|添加)|bibtex|\bpmid\b|\bdoi\b)/i;
 const POLISH_RE =
   /润色|polish|proofread|改写|语言润色|学术英语|de-?ai|proof\s*read|language edit/i;
 const LATEX_RE =
@@ -49,10 +51,21 @@ const RESEARCH_RE =
 /** Natural-language draft/edit intents (not limited to “写/draft”). */
 const WRITING_ACTION_RE =
   /写|撰写|起草|生成|准备|拟(?:一份|一个|一段|题|个标题|个题目)?|补充|完善|修改|更新|替换|换成|改成|改为|补上|加上|填上|填入|取(?:个|一个|一下)?(?:标题|题目)|拟题|起名|想(?:个|一个).{0,12}(?:标题|题目)|定(?:个|一个).{0,12}(?:标题|题目)|draft|write|prepare|compose|revise|create|make|generate|propose|suggest/i;
+/** Multi-block blank scaffolds / submission checklists — writing, not citation/research. */
+const STRUCTURAL_SCAFFOLD_RE =
+  /准备(?:一下)?(?:模块|结构|框架|骨架|声明)|(?:这些)?模块(?:作为|写入)|(?:作为\s*)?LaTeX\s*结构|搭(?:建)?骨架|结构写入|检查结构|补(?:齐|上|充)?结构|(?:内容|正文)?(?:暂时|先)?(?:为|设为|设置|未)?(?:空白|留空)|内容留空|先留白|留白占位|空壳|占位(?:符|块|段)?|投稿(?:前)?(?:材料|清单|要件)|声明部分|补充材料|title page|author guidelines|(?:准备|搭建|补齐).{0,24}scientific reports/i;
 const SELECTION_RE =
   /这段|这句|这句话|选区|所选|selected\s+(?:text|paragraph|sentence)|this\s+(?:paragraph|sentence|selection)/i;
 
-export type WorkflowRouteSource = "ui" | "command" | "rule" | "default";
+export function isStructuralScaffoldRequest(text: string): boolean {
+  const writingish =
+    WRITING_ACTION_RE.test(text) || /写入|插入|insert\b|add\b/i.test(text);
+  if (STRUCTURAL_SCAFFOLD_RE.test(text) && writingish) return true;
+  // Blank multi-module inserts with an explicit checklist / targetKind list.
+  return writingish && isBlankScaffoldIntent(text);
+}
+
+export type WorkflowRouteSource = "ui" | "command" | "rule" | "default" | "llm";
 
 export type WorkflowRoute = {
   kind: WorkflowKind;
@@ -60,6 +73,8 @@ export type WorkflowRoute = {
   reason: string;
   reviseProse: boolean;
   plan: WorkflowPlan;
+  /** When true, runtime should ask the closed-set LLM classifier before executing. */
+  needsLlmClassification?: boolean;
 };
 
 export type WorkflowRouteInput = {
@@ -76,6 +91,7 @@ const COMMAND_WORKFLOWS: Array<{ pattern: RegExp; kind: WorkflowKind }> = [
   { pattern: /^\s*\/(?:polish|proofread)\b/i, kind: "polish" },
   { pattern: /^\s*\/(?:latex|format)\b/i, kind: "latex" },
   { pattern: /^\s*\/(?:write|writing|draft|revise)\b/i, kind: "writing" },
+  { pattern: /^\s*\/(?:ask|advice|help)\b/i, kind: "advice" },
 ];
 
 const TARGET_PATTERNS: Array<{ pattern: RegExp; target: LatexTargetSpec }> = [
@@ -155,10 +171,19 @@ export function detectLatexTarget(text: string): LatexTargetSpec | undefined {
   const targetAction =
     WRITING_ACTION_RE.test(text) ||
     POLISH_RE.test(text) ||
-    /写入|插入|放入|放到|填充|add\s+to|insert\s+into|put\s+in/i.test(text);
+    CITATION_RE.test(text) ||
+    /写入|插入|放入|放到|填充|增加引用|补引用|add\s+to|insert\s+into|put\s+in/i.test(text);
   if (!targetAction) return undefined;
 
-  const known = TARGET_PATTERNS.find((candidate) => candidate.pattern.test(text));
+  // Multi-block scaffold / submission checklists must not collapse to one target
+  // (e.g. first hit “摘要”) — let writing emit multiple structural inserts instead.
+  if (isStructuralScaffoldRequest(text)) return undefined;
+
+  const knownMatches = TARGET_PATTERNS.filter((candidate) => candidate.pattern.test(text));
+  const uniqueKinds = new Set(knownMatches.map((match) => match.target.kind));
+  // Long requirement lists without an explicit single-section verb are multi-target.
+  if (uniqueKinds.size >= 3) return undefined;
+  const known = knownMatches[0];
   if (known) return { ...known.target };
 
   const custom = text.match(
@@ -186,7 +211,9 @@ export function detectSkillIntent(text: string): SkillIntent {
   ) {
     return "review";
   }
-  if (CITATION_RE.test(lower)) return "cite";
+  // Blank-module / submission-checklist prep is writing even if the list mentions references.
+  if (isStructuralScaffoldRequest(text)) return "write";
+  if (CITATION_RE.test(text)) return "cite";
   if (POLISH_RE.test(lower)) return "polish";
   if (LATEX_RE.test(lower)) return "latex";
   if (isNatureWritingRequest(text)) return "nature-writing";
@@ -227,7 +254,7 @@ function researchPurposeFor(kind: WorkflowKind): ResearchPurpose {
 }
 
 function researchSpecFor(kind: WorkflowKind, text: string): ResearchSpec | undefined {
-  if (kind === "compile-fix") return undefined;
+  if (kind === "compile-fix" || kind === "advice") return undefined;
   const explicitlyRequested = RESEARCH_RE.test(text) || kind === "research";
   if (kind !== "citation" && !explicitlyRequested) return undefined;
   const query = explicitlyRequested ? extractResearchQuery(text) : "";
@@ -240,8 +267,17 @@ function researchSpecFor(kind: WorkflowKind, text: string): ResearchSpec | undef
 }
 
 function planFor(kind: WorkflowKind, text: string): WorkflowPlan {
+  if (kind === "advice") {
+    return {
+      primary: "advice",
+      steps: ["advice"],
+      applyToLatex: false,
+    };
+  }
+
   const research = researchSpecFor(kind, text);
-  const target = detectLatexTarget(text);
+  const target =
+    kind === "research" || kind === "review" ? undefined : detectLatexTarget(text);
   const applyToLatex =
     kind === "writing" ||
     kind === "polish" ||
@@ -250,9 +286,13 @@ function planFor(kind: WorkflowKind, text: string): WorkflowPlan {
     kind === "compile-fix";
 
   const steps: WorkflowPlan["steps"] = [];
-  if (research) steps.push("research");
-  if (kind !== "research") steps.push(kind);
-  if (applyToLatex) steps.push("latex-apply");
+  if (kind === "research") {
+    steps.push("research");
+  } else {
+    if (research) steps.push("research");
+    steps.push(kind);
+    if (applyToLatex) steps.push("latex-apply");
+  }
 
   return {
     primary: kind,
@@ -269,6 +309,7 @@ function routeResult(args: {
   reason: string;
   text: string;
   reviseProse: boolean;
+  needsLlmClassification?: boolean;
 }): WorkflowRoute {
   return {
     kind: args.kind,
@@ -276,12 +317,17 @@ function routeResult(args: {
     reason: args.reason,
     reviseProse: args.kind === "citation" && args.reviseProse,
     plan: planFor(args.kind, args.text),
+    ...(args.needsLlmClassification ? { needsLlmClassification: true } : {}),
   };
 }
 
 /**
- * Routing priority: explicit UI action → slash command → legacy explicit action
- * → deterministic language rule → safe writing default.
+ * Routing priority: explicit UI → slash command → legacy intent →
+ * LLM closed-set classification for all other natural-language turns.
+ *
+ * Regex helpers still shape the *plan* (targets, research, blank-scaffold detection)
+ * after a kind is chosen. Runtime may override the handler for blank scaffolds
+ * without skipping the classifier (see `applyRuntimeScaffoldGuard`).
  */
 export function routeWorkflow(input: WorkflowRouteInput): WorkflowRoute {
   const text = input.text.trim();
@@ -321,51 +367,41 @@ export function routeWorkflow(input: WorkflowRouteInput): WorkflowRoute {
     });
   }
 
-  const intent = detectSkillIntent(text);
-  if (intent !== "write") {
-    const kind = workflowForIntent(intent);
-    return routeResult({
-      kind,
-      source: "rule",
-      reason: `Rule matched ${intent}`,
-      text,
-      reviseProse,
-    });
-  }
-
-  const researchRequested = RESEARCH_RE.test(text);
-  const target = detectLatexTarget(text);
-  if (researchRequested && !WRITING_ACTION_RE.test(text) && !target) {
-    return routeResult({
-      kind: "research",
-      source: "rule",
-      reason: "Standalone research requested",
-      text,
-      reviseProse: false,
-    });
-  }
-
-  if (researchRequested || target || WRITING_ACTION_RE.test(text)) {
-    return routeResult({
-      kind: "writing",
-      source: "rule",
-      reason: researchRequested
-        ? "Research-assisted writing requested"
-        : target
-          ? "Structured LaTeX writing target requested"
-          : "Writing action requested",
-      text,
-      reviseProse: false,
-    });
-  }
-
   return routeResult({
-    kind: "writing",
+    kind: "advice",
     source: "default",
-    reason: "No stronger workflow signal; use writing",
+    reason: "Natural-language request pending LLM classification",
     text,
     reviseProse: false,
+    needsLlmClassification: true,
   });
+}
+
+/**
+ * After LLM (or provisional) routing: blank-shell requests always execute as
+ * writing + runtime scaffold. Does not override explicit UI / slash commands.
+ */
+export function applyRuntimeScaffoldGuard(args: {
+  route: WorkflowRoute;
+  userText: string;
+  /** True when the user/UI/command already locked the workflow. */
+  locked: boolean;
+}): { route: WorkflowRoute; overridden: boolean; fromKind: WorkflowKind } {
+  const fromKind = args.route.kind;
+  if (args.locked || !isStructuralScaffoldRequest(args.userText)) {
+    return { route: args.route, overridden: false, fromKind };
+  }
+  if (fromKind === "writing" && args.route.plan.applyToLatex) {
+    return { route: args.route, overridden: false, fromKind };
+  }
+  return {
+    route: routeWorkflow({
+      text: args.userText,
+      explicitWorkflow: "writing",
+    }),
+    overridden: true,
+    fromKind,
+  };
 }
 
 export function detectWritingDomain(

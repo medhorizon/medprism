@@ -15,7 +15,8 @@ export type WorkflowKind =
   | "citation"
   | "latex"
   | "compile-fix"
-  | "review";
+  | "review"
+  | "advice";
 
 /** A visible, linear runtime stage. `latex-apply` is trusted code, not an agent. */
 export type WorkflowStageKind = WorkflowKind | "latex-apply";
@@ -139,6 +140,9 @@ export type ModelCompletionRequest = {
   config: LlmConfig;
   messages: ChatRequestMessage[];
   signal?: AbortSignal;
+  /** Stream tokens by default; set false only for callers that need a single JSON response. */
+  stream?: boolean;
+  onDelta?: (delta: string) => void;
 };
 
 export type WorkflowServices = {
@@ -156,6 +160,10 @@ export type WorkflowExecutionInput = {
   history: ChatRequestMessage[];
   ctx: ToolContext;
   services: WorkflowServices;
+  /** Optional UI callback for incremental model tokens. */
+  onDelta?: (delta: string) => void;
+  /** Cancel in-flight model calls when the user switches project or leaves. */
+  signal?: AbortSignal;
   /** Trusted output from the optional independent research stage. */
   research?: ResearchBundle;
 };

@@ -5,7 +5,6 @@ import { ProviderSettingsModal } from "../components/ProviderSettingsModal";
 import { useI18n } from "../i18n/context";
 import type { MessageKey } from "../i18n/types";
 import { loadAuth, signOut, type AuthState } from "../state/auth";
-import { hasCustomLlmConfig } from "../state/llm";
 import {
   createProjectFromBundledTemplate,
   deleteProject,
@@ -66,21 +65,14 @@ export function ProjectsPage() {
     if (storageError) setError(storageError.message);
   }, []);
   useEffect(() => {
-    if (auth.status !== "guest") return;
-    const setup = searchParams.get("setup");
-    if (setup === "api") {
-      setProviderOpen(true);
-      sessionStorage.setItem(PROVIDER_PROMPT_KEY, "1");
-      const next = new URLSearchParams(searchParams);
-      next.delete("setup");
-      setSearchParams(next, { replace: true });
-      return;
-    }
-    if (!hasCustomLlmConfig() && !sessionStorage.getItem(PROVIDER_PROMPT_KEY)) {
-      sessionStorage.setItem(PROVIDER_PROMPT_KEY, "1");
-      setProviderOpen(true);
-    }
-  }, [auth.status, searchParams, setSearchParams]);
+    // Only open Provider when explicitly requested (?setup=api), never as the default home.
+    if (searchParams.get("setup") !== "api") return;
+    setProviderOpen(true);
+    sessionStorage.setItem(PROVIDER_PROMPT_KEY, "1");
+    const next = new URLSearchParams(searchParams);
+    next.delete("setup");
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   function refresh() {
     const loaded = loadProjectsResult();

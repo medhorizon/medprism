@@ -1,5 +1,13 @@
-import { useRef, type ChangeEvent, type KeyboardEvent, type PointerEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type ChangeEvent,
+  type KeyboardEvent,
+  type PointerEvent,
+} from "react";
 import { useI18n } from "../i18n/context";
+import { MAX_PROJECT_MEMORY_CHARS } from "../lib/projectMemory";
 import type { ChatMessage } from "../types/chat";
 
 type AssistantCardProps = {
@@ -14,6 +22,8 @@ type AssistantCardProps = {
   onKeep: (message: ChatMessage) => void;
   onUndo: (message: ChatMessage) => void;
   sending?: boolean;
+  memoryNotes?: string;
+  onMemoryNotesChange?: (notes: string) => void;
 };
 
 function IconSend() {
@@ -27,6 +37,17 @@ function IconSend() {
 export function AssistantCard(props: AssistantCardProps) {
   const { t } = useI18n();
   const dragRef = useRef<{ startY: number; startH: number } | null>(null);
+  const [memoryOpen, setMemoryOpen] = useState(false);
+  const [memoryDraft, setMemoryDraft] = useState(props.memoryNotes ?? "");
+
+  useEffect(() => {
+    setMemoryDraft(props.memoryNotes ?? "");
+  }, [props.memoryNotes]);
+
+  function flushMemory(next: string = memoryDraft) {
+    props.onMemoryNotesChange?.(next);
+  }
+
   function onResizeStart(event: PointerEvent<HTMLDivElement>) {
     event.preventDefault();
     dragRef.current = { startY: event.clientY, startH: props.height };
@@ -44,6 +65,8 @@ export function AssistantCard(props: AssistantCardProps) {
     document.body.style.userSelect = "";
   }
 
+  const hasMemory = Boolean((props.memoryNotes ?? "").trim());
+
   return (
     <div className="ai-float" role="dialog" aria-label={t("assistant.title")}>
       <div className="ai-card" style={{ height: props.height }}>
@@ -52,9 +75,49 @@ export function AssistantCard(props: AssistantCardProps) {
         </div>
         <div className="ai-card-bar">
           <span className="ai-card-title">{t("assistant.title")}</span>
-          <div className="panel-head-actions"><button className="icon-btn" type="button" title={t("assistant.collapse")} onClick={props.onCollapse}>⌄</button></div>
+          <div className="panel-head-actions">
+            {props.onMemoryNotesChange && (
+              <button
+                className="icon-btn"
+                type="button"
+                title={t("assistant.memory")}
+                aria-label={t("assistant.memory")}
+                aria-pressed={memoryOpen}
+                data-active={hasMemory ? "1" : undefined}
+                onClick={() => {
+                  if (memoryOpen) flushMemory();
+                  setMemoryOpen((open) => !open);
+                }}
+              >
+                ✎
+              </button>
+            )}
+            <button className="icon-btn" type="button" title={t("assistant.collapse")} onClick={props.onCollapse}>⌄</button>
+          </div>
         </div>
         <div className="ai-body">
+          {memoryOpen && props.onMemoryNotesChange && (
+            <div className="ai-memory">
+              <div className="ai-memory-head">
+                <span>{t("assistant.memory")}</span>
+                <span className="ai-memory-count">
+                  {memoryDraft.length}/{MAX_PROJECT_MEMORY_CHARS}
+                </span>
+              </div>
+              <p className="ai-memory-hint">{t("assistant.memoryHint")}</p>
+              <textarea
+                className="ai-memory-input"
+                value={memoryDraft}
+                maxLength={MAX_PROJECT_MEMORY_CHARS}
+                rows={4}
+                placeholder={t("assistant.memoryPlaceholder")}
+                onChange={(event: ChangeEvent<HTMLTextAreaElement>) => {
+                  setMemoryDraft(event.currentTarget.value);
+                }}
+                onBlur={() => flushMemory()}
+              />
+            </div>
+          )}
           <div className="ai-thread">
             {props.chat.map((message) => {
               const suggestion = message.suggestion;

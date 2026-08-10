@@ -12,6 +12,8 @@ export type ToolContext = {
   selectedText?: string;
   projectRevision?: string;
   lastCompileLog?: string;
+  /** Optional durable project notes (journal prefs, terminology, decisions). */
+  memoryNotes?: string;
 };
 
 export type ToolResult =

@@ -1,3 +1,5 @@
+import { parseTargetKind } from "../latex/targetKind";
+import type { LatexTargetKind } from "../latex/types";
 import { assertSafeProjectRelativePath, UnsafeProjectPathError } from "../projectPath";
 import { isSha256Hex } from "./hash";
 
@@ -67,8 +69,11 @@ export type ModelEditProposal =
   | {
       op: "insert_before" | "insert_after";
       path?: string;
+      /** Optional; runtime may replace with a trusted unique source marker. */
       anchor: string;
       text: string;
+      /** Semantic destination; runtime resolves the real insert position. */
+      targetKind?: LatexTargetKind;
     };
 
 export type ModelPatchProposal = {
@@ -357,11 +362,18 @@ export function parseModelPatchProposal(value: unknown): ParseProposalResult {
         };
       }
       if (op.op === "insert_before" || op.op === "insert_after") {
+        // Anchor may be omitted: runtime hydrate resolves a structural position.
+        const anchor =
+          op.anchor === undefined || op.anchor === null
+            ? ""
+            : checkedText(op.anchor, `${op.op}.anchor`);
+        const targetKind = parseTargetKind(op.targetKind);
         return {
           op: op.op,
           ...(optionalPath ? { path: optionalPath } : {}),
-          anchor: checkedText(op.anchor, `${op.op}.anchor`),
+          anchor,
           text: checkedText(op.text, `${op.op}.text`),
+          ...(targetKind ? { targetKind } : {}),
         };
       }
       throw new Error("Model proposals may only contain replace_text/insert operations");

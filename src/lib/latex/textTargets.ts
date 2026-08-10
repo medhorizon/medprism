@@ -222,6 +222,47 @@ function sectionPatterns(kinds: readonly LatexTargetKind[]): RegExp[] {
   });
 }
 
+/** Public helper for patch hydrate: place a named structural block correctly. */
+export function trustedInsertPlacement(
+  source: string,
+  kind: LatexTargetKind,
+): { mode: "insert_before" | "insert_after"; anchor: string } | null {
+  const anchor = safeInsertionAnchor(source, kind);
+  if (!anchor) return null;
+  return { mode: anchor.mode, anchor: anchor.text };
+}
+
+/** Infer a structural target from draft LaTeX (heading / command), not from file offsets. */
+export function inferLatexTargetKindFromDraft(text: string): LatexTargetKind | null {
+  if (/\\keywords\b/i.test(text) || /\\kwd\b/i.test(text)) return "keywords";
+  if (/\\begin\s*\{\s*abstract\s*\}/i.test(text) || /\\abstract\s*\{/i.test(text)) {
+    return "abstract";
+  }
+  if (/\\title\b/i.test(text)) return "title";
+
+  const headingMatch = text.match(
+    /\\(?:section\*?|subsection\*?|bmhead)\s*(?:\[[^\]]*\]\s*)?\{([^}]+)\}/i,
+  );
+  const haystack = normalizeHeading(headingMatch?.[1] ?? text.slice(0, 240));
+  if (!haystack) return null;
+
+  let best: { kind: LatexTargetKind; score: number } | null = null;
+  for (const [kind, aliases] of Object.entries(TARGET_ALIASES) as Array<
+    [LatexTargetKind, string[]]
+  >) {
+    for (const alias of aliases) {
+      const needle = normalizeHeading(alias);
+      if (!needle) continue;
+      if (haystack === needle) return kind;
+      if (needle.length >= 5 && haystack.includes(needle)) {
+        const score = needle.length;
+        if (!best || score > best.score) best = { kind, score };
+      }
+    }
+  }
+  return best?.kind ?? null;
+}
+
 function safeInsertionAnchor(
   source: string,
   kind: LatexTargetKind,
@@ -273,9 +314,10 @@ function safeInsertionAnchor(
 
   if (kind === "keywords") {
     // Journal templates (e.g. sn-jnl) place keywords after abstract and before \maketitle.
+    // Prefer a unique full command match so range-less validation stays safe.
     const beforeMaketitle = firstMatchRange(source, [
       /\\maketitle\b/i,
-      /\\(?:section\*?|bmhead)\s*(?:\[[^\]]*\]\s*)?\{/i,
+      /\\(?:section\*?|bmhead)\s*(?:\[[^\]]*\]\s*)?\{[^}]*\}/i,
     ]);
     if (beforeMaketitle) return { mode: "insert_before", ...beforeMaketitle };
     const masked = structuralMask(source);
@@ -554,7 +596,12 @@ export async function buildLatexTextPatch(args: {
   const normalized = args.format === "plain-text"
     ? normalizePlainDraft(args.text)
     : args.text.replace(/\r\n?|\r/g, "\n").trim();
-  if (!normalized) return { ok: false, message: "The generated text is empty." };
+  const inserting =
+    args.target.mode === "insert_before" || args.target.mode === "insert_after";
+  // Runtime scaffolds may insert empty section shells; replacements still need prose.
+  if (!normalized && !inserting) {
+    return { ok: false, message: "The generated text is empty." };
+  }
   if (normalized.length > 80_000) {
     return { ok: false, message: "The generated text exceeds the safe draft length." };
   }

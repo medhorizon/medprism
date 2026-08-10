@@ -1,3 +1,4 @@
+import { softenRawPatchProposal } from "./patch/insertAnchor";
 import {
   parseModelPatchProposal,
   parsePatchSet,
@@ -35,17 +36,42 @@ export type ParseWorkflowEnvelopeResult =
   | { ok: true; envelope: ModelWorkflowEnvelope }
   | { ok: false; error: PatchValidationError; rawContent: string };
 
+/** Best-effort cleanup for common model JSON quirks (esp. GPT trailing commas). */
+export function repairJsonText(text: string): string {
+  return text
+    .replace(/^\uFEFF/, "")
+    // Trailing commas before } or ]
+    .replace(/,(\s*[}\]])/g, "$1")
+    // // line comments
+    .replace(/^\s*\/\/.*$/gm, "");
+}
+
+function tryParseJson(text: string): unknown {
+  return JSON.parse(text);
+}
+
 export function extractJsonValue(raw: string): unknown {
   const fence = raw.match(/```json\s*([\s\S]*?)```/i) ?? raw.match(/```patch\s*([\s\S]*?)```/i);
   const candidate = fence?.[1]?.trim() ?? raw.trim();
-  try {
-    return JSON.parse(candidate);
-  } catch {
-    const start = candidate.indexOf("{");
-    const end = candidate.lastIndexOf("}");
-    if (start >= 0 && end > start) return JSON.parse(candidate.slice(start, end + 1));
-    throw new Error("Model response did not contain valid JSON");
+  const attempts = [candidate];
+  const start = candidate.indexOf("{");
+  const end = candidate.lastIndexOf("}");
+  if (start >= 0 && end > start) {
+    attempts.push(candidate.slice(start, end + 1));
   }
+  let lastError: unknown;
+  for (const attempt of attempts) {
+    for (const text of [attempt, repairJsonText(attempt)]) {
+      try {
+        return tryParseJson(text);
+      } catch (error) {
+        lastError = error;
+      }
+    }
+  }
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Model response did not contain valid JSON");
 }
 
 function invalidWorkflowResult(message: string, raw: string): ParseWorkflowEnvelopeResult {
@@ -97,9 +123,12 @@ export function parseModelWorkflowEnvelope(
   }
 
   const record = value as Record<string, unknown>;
-  if (record.schemaVersion !== "1") {
+  const schemaVersion =
+    record.schemaVersion === 1 || record.schemaVersion === "1" ? "1" : record.schemaVersion;
+  if (schemaVersion !== "1") {
     return invalidWorkflowResult('Workflow result schemaVersion must be "1"', raw);
   }
+  record.schemaVersion = "1";
   if (record.workflow !== expectedWorkflow) {
     return invalidWorkflowResult(
       `Expected workflow ${expectedWorkflow}, received ${String(record.workflow ?? "<missing>")}`,
@@ -143,7 +172,7 @@ export function parseModelWorkflowEnvelope(
 
   let proposal: ModelPatchProposal | undefined;
   if (hasPayload(patchProposalValue)) {
-    const parsed = parseModelPatchProposal(patchProposalValue);
+    const parsed = parseModelPatchProposal(softenRawPatchProposal(patchProposalValue));
     if (!parsed.ok) {
       return { ok: false, error: parsed.error, rawContent: raw.trim() };
     }
@@ -190,7 +219,7 @@ export function parseProposalEnvelope(raw: string): ProposalEnvelope {
 
     const patchProposalValue = effectivePatchProposal(envelope.patchProposal);
     if (hasPayload(patchProposalValue)) {
-      const proposal = parseModelPatchProposal(patchProposalValue);
+      const proposal = parseModelPatchProposal(softenRawPatchProposal(patchProposalValue));
       if (!proposal.ok) return { content, error: proposal.error };
       return { content, proposal: proposal.proposal };
     }

@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { routeWorkflow } from "../skillRouter";
+import { detectSkillIntent, routeWorkflow, workflowForIntent } from "../skillRouter";
 import { simulatePatchSet } from "../patch/simulate";
 import type { ToolContext, ToolResult } from "../../tools/types";
 import { executeWorkflow, listWorkflows } from "./executor";
-import type { WorkflowRequest, WorkflowServices } from "./types";
+import type { WorkflowKind, WorkflowRequest, WorkflowServices } from "./types";
 
 const config = { mode: "mock" } as const;
 
@@ -50,8 +50,32 @@ function services(args: {
   };
 }
 
+/** Tests simulate the post-classifier bind; production uses classifyWorkflowKind. */
+function simulateClassifiedKind(text: string): WorkflowKind {
+  const intent = detectSkillIntent(text);
+  if (intent !== "write" && intent !== "nature-writing") {
+    return workflowForIntent(intent);
+  }
+  // Standalone research was never part of detectSkillIntent — keep test parity.
+  if (
+    /(?:调研|literature\s+search|\bresearch\b)/i.test(text) &&
+    !/写|撰写|润色|cite|引用|补引用|完善|准备|修改|更新|生成|draft|write|prepare|revise/i.test(
+      text,
+    )
+  ) {
+    return "research";
+  }
+  if (
+    /补充哪些|检查模板|还有[哪那]些.*需要补充|需要准备什么|怎么办|是什么意思/i.test(text)
+  ) {
+    return "advice";
+  }
+  return "writing";
+}
+
 function requestFor(text: string, args: Partial<WorkflowRequest> = {}): WorkflowRequest {
-  const route = routeWorkflow({ text });
+  const kind = args.kind ?? simulateClassifiedKind(text);
+  const route = routeWorkflow({ text, explicitWorkflow: kind });
   return {
     kind: route.kind,
     userText: text,
@@ -85,8 +109,9 @@ function targetedDraft(text: string, workflow: "writing" | "polish" = "writing",
 }
 
 describe("workflow executor", () => {
-  it("registers seven deterministic workflows, including independent research", () => {
+  it("registers eight deterministic workflows, including advice and research", () => {
     expect(listWorkflows().sort()).toEqual([
+      "advice",
       "citation",
       "compile-fix",
       "latex",
@@ -307,6 +332,58 @@ describe("workflow executor", () => {
       "replace_text",
     ]);
     expect(result.agent.patch?.verify?.compile).toBe(true);
+  });
+
+  it("locates a Discussion claim via LLM when citation has no selection", async () => {
+    const claim = "Immune activation worsens outcomes.";
+    const source = [
+      "\\section{Discussion}",
+      claim,
+      "Further discussion.",
+      "\\bibliography{references}",
+      "\\end{document}",
+    ].join("\n");
+    const events: string[] = [];
+    const result = await executeWorkflow({
+      request: requestFor("帮我给这篇文章的discussion增加引用", {
+        kind: "citation",
+        activeFile: "main.tex",
+      }),
+      config,
+      history: [],
+      ctx: context({ source }),
+    }, services({
+      toolResult: { ok: true, data: { hits: [trustedHit] } },
+      modelResponses: [
+        JSON.stringify({
+          claimText: claim,
+          path: "main.tex",
+          reason: "Unsupported claim",
+        }),
+        JSON.stringify({
+          schemaVersion: "1",
+          workflow: "citation",
+          summary: "Choose evidence",
+          warnings: [],
+          citationPlan: {
+            candidates: [{
+              candidateId: trustedHit.id,
+              relation: "supports",
+              selected: true,
+              reason: "Relevant abstract.",
+            }],
+          },
+        }),
+      ],
+      onTool: () => events.push("research"),
+      onModel: () => events.push("model"),
+    }));
+
+    expect(events).toEqual(["model", "research", "model"]);
+    expect(result.toolNotes.some((note) => note.startsWith("citation-claim:llm:"))).toBe(true);
+    expect(result.agent.patch?.operations.some((operation) => operation.op === "replace_text")).toBe(
+      true,
+    );
   });
 
   it("standalone research returns an advisory report and never a PatchSet", async () => {

@@ -2,6 +2,7 @@ import { assertSafeProjectRelativePath } from "../projectPath";
 import { sha256Hex } from "../patch/hash";
 import { projectRevision } from "../patch/revision";
 import { taggedPromptData } from "../promptData";
+import { MAX_PROJECT_MEMORY_CHARS } from "../projectMemory";
 
 export type TextSelection = { start: number; end: number };
 
@@ -12,6 +13,8 @@ export type ContextInput = {
   activeFile?: string;
   selection?: TextSelection;
   lastCompileLog?: string;
+  /** Optional durable project notes injected into model context. */
+  memoryNotes?: string;
 };
 
 export type ContextSnapshot = {
@@ -25,6 +28,7 @@ export type ContextSnapshot = {
   selectedText?: string;
   localContext: string;
   lastCompileLog?: string;
+  memoryNotes?: string;
 };
 
 export class ContextSnapshotError extends Error {
@@ -86,6 +90,7 @@ export async function buildContextSnapshot(input: ContextInput): Promise<Context
     }
   }
 
+  const memoryNotes = input.memoryNotes?.replace(/\r\n?/g, "\n").trim();
   return {
     projectId: input.projectId,
     projectRevision: await projectRevision(files),
@@ -97,6 +102,9 @@ export async function buildContextSnapshot(input: ContextInput): Promise<Context
     ...(selectedText !== undefined ? { selectedText } : {}),
     localContext: localExcerpt(content, selection),
     ...(input.lastCompileLog ? { lastCompileLog: input.lastCompileLog } : {}),
+    ...(memoryNotes
+      ? { memoryNotes: memoryNotes.slice(0, MAX_PROJECT_MEMORY_CHARS) }
+      : {}),
   };
 }
 
@@ -109,6 +117,9 @@ export function formatWorkspaceContext(snapshot: ContextSnapshot): string {
       selection: snapshot.selection ?? null,
       selectedText: snapshot.selectedText ?? null,
       localSourceContext: snapshot.localContext,
+      ...(snapshot.memoryNotes
+        ? { projectMemoryNotes: snapshot.memoryNotes }
+        : {}),
     },
   );
 }

@@ -11,11 +11,13 @@ import {
 import { taggedPromptData } from "../promptData";
 import { compactPaperHits, validateResearchUse } from "../research/service";
 import { parseModelWorkflowEnvelope } from "../replyParse";
+import { buildScaffoldFromUserText } from "../latex/scaffold";
 import {
   detectWritingDomain,
   isNatureWritingRequest,
+  isStructuralScaffoldRequest,
 } from "../skillRouter";
-import { finalizeModelPatchProposal } from "./latexApply";
+import { finalizeModelPatchProposal, finalizePatchSet } from "./latexApply";
 import { buildWorkflowSystemPrompt } from "./prompt";
 import { runTargetedTextWorkflow } from "./textWriting";
 import {
@@ -80,6 +82,56 @@ export const runWritingWorkflow: WorkflowHandler = async (input) => {
   const skill = selectedWritingSkill(input);
   const target = input.request.plan?.target;
 
+  // Runtime-owned blank module shells — modules parsed from the user checklist / targetKinds.
+  // Bind on intent, not only workflow kind, so a misclassified polish/latex still scaffolds.
+  if (isStructuralScaffoldRequest(input.request.userText)) {
+    const scaffold = await buildScaffoldFromUserText(snapshot, input.request.userText);
+    if (!scaffold.ok) {
+      return {
+        agent: emptyAgentResult(kind, "Structural scaffold", [scaffold.message]),
+        content: scaffold.message,
+        toolNotes: [`workflow:${kind}:scaffold:none`, `skill:${skill.id}`],
+      };
+    }
+    const finalized = await finalizePatchSet(snapshot, scaffold.patchSet);
+    if (!finalized.ok) {
+      return invalidModelResult(kind, finalized.error.message);
+    }
+    const skippedNote =
+      scaffold.skipped.length > 0
+        ? `已跳过已存在或不适用项：${scaffold.skipped.join("、")}。`
+        : "";
+    return {
+      agent: {
+        schemaVersion: "1",
+        workflow: kind,
+        summary: scaffold.patchSet.summary,
+        warnings: scaffold.skipped.length ? [skippedNote] : [],
+        patch: finalized.patchSet,
+      },
+      content: [
+        `已由运行时按${
+          scaffold.parseSource === "checklist"
+            ? "清单"
+            : scaffold.parseSource === "mentions"
+              ? "请求中的模块名"
+              : scaffold.parseSource === "default"
+                ? "默认投稿声明列表"
+                : "指定模块"
+        }写入 ${scaffold.added.length} 个空模块骨架（${scaffold.added.join("、")}）。`,
+        "内容为占位，请查看 Diff 后选择 Keep。",
+        skippedNote,
+      ]
+        .filter(Boolean)
+        .join(" "),
+      toolNotes: [
+        `workflow:${kind}:scaffold:${scaffold.added.length}`,
+        `scaffold:source:${scaffold.parseSource}`,
+        `skill:${skill.id}`,
+      ],
+    };
+  }
+
   // All runtime-locatable prose targets use the same trusted LaTeX adapter.
   if ((kind === "writing" || kind === "polish") && target) {
     return runTargetedTextWorkflow({ input, snapshot, skill, targetSpec: target });
@@ -111,7 +163,7 @@ export const runWritingWorkflow: WorkflowHandler = async (input) => {
           ),
         }]
       : []),
-    ...input.history.slice(-10),
+    ...input.history,
     {
       role: "user" as const,
       content: taggedPromptData("user_request", "", { text: input.request.userText }),

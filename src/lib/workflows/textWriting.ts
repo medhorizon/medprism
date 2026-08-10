@@ -163,6 +163,9 @@ export async function runTargetedTextWorkflow(args: {
         'trust="untrusted-data"',
         {
           activeFile: snapshot.activeFile,
+          ...(snapshot.memoryNotes
+            ? { projectMemoryNotes: snapshot.memoryNotes }
+            : {}),
           textTarget: {
             kind: target.kind,
             path: target.path,
@@ -192,7 +195,7 @@ export async function runTargetedTextWorkflow(args: {
           ),
         }]
       : []),
-    ...input.history.slice(-6),
+    ...input.history,
     {
       role: "user" as const,
       content: taggedPromptData("user_request", "", {

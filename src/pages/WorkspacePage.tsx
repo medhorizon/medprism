@@ -7,18 +7,40 @@ import { ProviderSettingsModal } from "../components/ProviderSettingsModal";
 import { ResizeHandle } from "../components/ResizeHandle";
 import { SourcePane } from "../components/SourcePane";
 import { Topbar } from "../components/Topbar";
-import { runAssistant } from "../lib/assistantRuntime";
 import type { WorkflowKind } from "../lib/workflows/types";
 import { compileProject } from "../lib/compileClient";
 import { projectRevision } from "../lib/patch/revision";
 import { downloadProjectZip } from "../lib/exportZip";
-import { isUsableLlmConfig, LlmClientError, type ChatRequestMessage } from "../lib/llmClient";
+import { toLlmHistory } from "../lib/chatHistory";
+import { isUsableLlmConfig, LlmClientError } from "../lib/llmClient";
+import {
+  compiledPdfPath,
+  decodeBinaryFile,
+  withCompiledPdfFiles,
+} from "../lib/projectBinary";
 import { withSuggestionStatus } from "../lib/suggestions";
 import type { TextSelection } from "../lib/context/snapshot";
 import { useI18n } from "../i18n/context";
 import { DEMO_PROJECT_ID } from "../data/sample";
 import { loadAuth } from "../state/auth";
 import { resolveLlmConfig } from "../state/llm";
+import {
+  clearProjectPdf,
+  loadProjectChat,
+  loadProjectMemory,
+  loadProjectPdf,
+  saveProjectMemory,
+} from "../state/projectArtifacts";
+import {
+  adoptProjectChat,
+  getSessionChat,
+  isSessionSending,
+  persistDurableChat,
+  setSessionChat,
+  shutdownProjectChats,
+  startProjectAssistant,
+  subscribeProjectChat,
+} from "../state/projectChatSession";
 import {
   ensureDemoProject,
   getLastProjectStoreError,
@@ -71,7 +93,9 @@ export function WorkspacePage() {
   const [activeFile, setActiveFile] = useState("main.tex");
   const [selection, setSelection] = useState<TextSelection | undefined>();
   const [chat, setChat] = useState<ChatMessage[]>([]);
+  const chatRef = useRef<ChatMessage[]>(chat);
   const [draft, setDraft] = useState("");
+  const [memoryNotes, setMemoryNotes] = useState("");
   const [aiOpen, setAiOpen] = useState(true);
   const [aiHeight, setAiHeight] = useState(280);
   const [filesWidth, setFilesWidth] = useState(220);
@@ -102,6 +126,30 @@ export function WorkspacePage() {
   const saveQueueRef = useRef<ProjectSaveQueue | null>(null);
   const mountedRef = useRef(true);
   const sizeWarningProjectRef = useRef<string | null>(null);
+  const projectIdRef = useRef(projectId);
+  projectIdRef.current = projectId;
+
+  const interruptedLabelRef = useRef(t("assistant.interrupted"));
+  interruptedLabelRef.current = t("assistant.interrupted");
+
+  function syncChatFromSession(id: string) {
+    setChat(getSessionChat(id));
+    setSending(isSessionSending(id));
+  }
+
+  function updateChat(
+    updater: ChatMessage[] | ((previous: ChatMessage[]) => ChatMessage[]),
+    options?: { persist?: boolean },
+  ) {
+    const id = projectRef.current?.id;
+    if (!id) {
+      setChat(updater);
+      return;
+    }
+    const next = setSessionChat(id, updater, options);
+    setChat(next);
+    setSending(isSessionSending(id));
+  }
 
   function flash(message: string) {
     setToast(message);
@@ -153,11 +201,29 @@ export function WorkspacePage() {
           t("assistant.demo.q1"),
           t("assistant.demo.q2"),
           t("assistant.demo.q3"),
-          t("assistant.demo.q4"),
           review,
+          t("assistant.demo.q4"),
         ]
-      : [t("assistant.q1"), t("assistant.q2"), t("assistant.q3"), t("assistant.q4"), review];
+      : [
+          t("assistant.q1"),
+          t("assistant.q2"),
+          t("assistant.q3"),
+          review,
+          t("assistant.q4"),
+        ];
   }, [demo, t]);
+
+  useEffect(() => {
+    chatRef.current = chat;
+  }, [chat]);
+
+  useEffect(() => {
+    return subscribeProjectChat(() => {
+      const id = projectIdRef.current;
+      if (!id) return;
+      syncChatFromSession(id);
+    });
+  }, []);
 
   useEffect(() => {
     setAuth(loadAuth());
@@ -166,18 +232,40 @@ export function WorkspacePage() {
   useEffect(() => {
     return () => {
       const leaving = projectRef.current;
-      if (leaving) void saveQueueRef.current?.flush(leaving);
+      if (!leaving) return;
+      void saveQueueRef.current?.flush(leaving);
+      // Keep in-flight assistant turns alive across workspace unmount / project switch.
+      if (!isSessionSending(leaving.id)) {
+        persistDurableChat(leaving.id, chatRef.current);
+      }
     };
   }, [projectId]);
 
   useEffect(() => {
+    const previousId = projectRef.current?.id;
+    if (previousId && previousId !== projectId && !isSessionSending(previousId)) {
+      persistDurableChat(previousId, getSessionChat(previousId));
+    }
+    if (pdfUrlRef.current) {
+      URL.revokeObjectURL(pdfUrlRef.current);
+      pdfUrlRef.current = null;
+    }
+    setPdfUrl(null);
+
     const next = initialProject(projectId);
     setProjectState(next);
     setSelection(undefined);
     sizeWarningProjectRef.current = null;
     const storageError = getLastProjectStoreError();
     if (storageError) flash(`项目存储错误：${storageError.message}`);
-    if (!next) return;
+    if (!next) {
+      setChat([]);
+      setMemoryNotes("");
+      setSending(false);
+      setCompiled(false);
+      setCompileFailed(false);
+      return;
+    }
     const order = next.fileOrder ?? Object.keys(next.files);
     const preferred =
       (next.mainFile && next.files[next.mainFile] ? next.mainFile : undefined) ??
@@ -185,25 +273,59 @@ export function WorkspacePage() {
       Object.keys(next.files)[0] ??
       "main.tex";
     setActiveFile(preferred);
-    setChat([
-      {
-        id: "a1",
-        role: "assistant",
-        content: isDemoProject(next) ? t("assistant.demo.initial") : t("assistant.initial"),
-      },
-    ]);
+    const savedChat = loadProjectChat(
+      next.id,
+      localStorage,
+      interruptedLabelRef.current,
+    );
+    const fallback =
+      savedChat && savedChat.length > 0
+        ? savedChat
+        : [
+            {
+              id: "a1",
+              role: "assistant" as const,
+              content: isDemoProject(next) ? t("assistant.demo.initial") : t("assistant.initial"),
+            },
+          ];
+    const live = adoptProjectChat(next.id, fallback);
+    setChat(live);
+    setMemoryNotes(loadProjectMemory(next.id));
+    setSending(isSessionSending(next.id));
     setCompiled(false);
     setCompileFailed(false);
+
+    void (async () => {
+      if (projectRef.current?.id !== next.id) return;
+      const migrated = await hydratePdfForProject(next);
+      if (migrated && projectRef.current?.id === migrated.id) {
+        setProjectState(migrated);
+      }
+    })();
   }, [projectId, t]);
+
+  useEffect(() => {
+    if (!project?.id || chat.length === 0) return;
+    if (chat.some((message) => message.pending) || isSessionSending(project.id)) return;
+    const timer = window.setTimeout(() => {
+      persistDurableChat(project.id, chat);
+    }, 400);
+    return () => window.clearTimeout(timer);
+  }, [chat, project?.id]);
 
   useEffect(() => {
     const saveBeforeUnload = () => {
       const current = projectRef.current;
-      if (!current) return;
-      const saved = storeRef.current?.saveProject(current, { expectedRevision: current.revision });
-      // beforeunload can be cancelled by the user. Keep the in-memory CAS revision
-      // synchronized so subsequent edits do not fail against our own save.
-      if (saved?.ok) projectRef.current = saved.value;
+      if (current) {
+        const saved = storeRef.current?.saveProject(current, {
+          expectedRevision: current.revision,
+        });
+        // beforeunload can be cancelled by the user. Keep the in-memory CAS revision
+        // synchronized so subsequent edits do not fail against our own save.
+        if (saved?.ok) projectRef.current = saved.value;
+      }
+      // Closing MedPrism: stop background turns and flush durable chat.
+      shutdownProjectChats(interruptedLabelRef.current);
     };
     window.addEventListener("beforeunload", saveBeforeUnload);
     return () => window.removeEventListener("beforeunload", saveBeforeUnload);
@@ -249,6 +371,15 @@ export function WorkspacePage() {
     [project?.title, t],
   );
 
+  function setPdfFromBytes(bytes?: Uint8Array | null) {
+    if (!bytes || bytes.length === 0) return;
+    const copy = new Uint8Array(bytes);
+    const url = URL.createObjectURL(new Blob([copy], { type: "application/pdf" }));
+    if (pdfUrlRef.current) URL.revokeObjectURL(pdfUrlRef.current);
+    pdfUrlRef.current = url;
+    setPdfUrl(url);
+  }
+
   function setPdfFromBase64(pdfBase64?: string) {
     if (!pdfBase64) return;
     const binary = atob(pdfBase64);
@@ -256,10 +387,7 @@ export function WorkspacePage() {
     for (let index = 0; index < binary.length; index += 1) {
       bytes[index] = binary.charCodeAt(index);
     }
-    const url = URL.createObjectURL(new Blob([bytes], { type: "application/pdf" }));
-    if (pdfUrlRef.current) URL.revokeObjectURL(pdfUrlRef.current);
-    pdfUrlRef.current = url;
-    setPdfUrl(url);
+    setPdfFromBytes(bytes);
   }
 
   function mainFileFor(current: Project): string {
@@ -269,6 +397,95 @@ export function WorkspacePage() {
       Object.keys(current.files).find((path) => path.toLowerCase().endsWith(".tex")) ??
       "main.tex"
     );
+  }
+
+  function pdfPathFor(current: Project): string {
+    return compiledPdfPath(mainFileFor(current));
+  }
+
+  /** Load preview from project file; migrate legacy PDF cache into the project once. */
+  async function hydratePdfForProject(current: Project): Promise<Project | null> {
+    const pdfPath = pdfPathFor(current);
+    const embedded = decodeBinaryFile(current.files[pdfPath] ?? "");
+    if (embedded) {
+      setPdfFromBytes(embedded);
+      setCompiled(true);
+      setCompileFailed(false);
+      clearProjectPdf(current.id);
+      return null;
+    }
+
+    const cached = loadProjectPdf(current.id);
+    if (!cached?.pdfBase64) return null;
+    const mainFile = mainFileFor(current);
+    const attached = withCompiledPdfFiles(
+      current.files,
+      mainFile,
+      cached.pdfBase64,
+      current.fileOrder,
+    );
+    const saved = upsertProjectResult(
+      {
+        ...current,
+        files: attached.files,
+        ...(attached.fileOrder ? { fileOrder: attached.fileOrder } : {}),
+        updatedAt: new Date().toISOString(),
+      },
+      current.revision,
+    );
+    if (!saved.ok) {
+      setPdfFromBase64(cached.pdfBase64);
+      setCompiled(true);
+      setCompileFailed(false);
+      return null;
+    }
+    clearProjectPdf(current.id);
+    setPdfFromBase64(cached.pdfBase64);
+    setCompiled(true);
+    setCompileFailed(false);
+    return saved.value;
+  }
+
+  async function persistCompiledPdf(
+    projectId: string,
+    mainFile: string,
+    pdfBase64: string,
+    baseFiles?: Record<string, string>,
+  ): Promise<Project | null> {
+    const current =
+      projectRef.current?.id === projectId
+        ? projectRef.current
+        : getProject(projectId) ?? null;
+    if (!current) return null;
+    const sourceFiles = baseFiles ?? current.files;
+    const attached = withCompiledPdfFiles(
+      sourceFiles,
+      mainFile,
+      pdfBase64,
+      current.fileOrder,
+    );
+    const saved = upsertProjectResult(
+      {
+        ...current,
+        files: attached.files,
+        ...(attached.fileOrder ? { fileOrder: attached.fileOrder } : {}),
+        updatedAt: new Date().toISOString(),
+      },
+      current.revision,
+    );
+    if (!saved.ok) {
+      flash(
+        saved.error.code === "QUOTA_EXCEEDED"
+          ? "保存 PDF 失败：本地存储空间不足，请导出 ZIP 备份。"
+          : `保存 PDF 失败：${saved.error.message}`,
+      );
+      return null;
+    }
+    clearProjectPdf(projectId);
+    if (projectRef.current?.id === projectId) {
+      setProjectState(saved.value);
+    }
+    return saved.value;
   }
 
   async function compileSnapshot(current: Project): Promise<boolean> {
@@ -311,6 +528,12 @@ export function WorkspacePage() {
       setPdfFromBase64(result.pdfBase64);
       setCompiled(true);
       setCompileFailed(false);
+      await persistCompiledPdf(
+        current.id,
+        mainFileFor(current),
+        result.pdfBase64,
+        latest.files,
+      );
       flash(t("workspace.toastCompiled"));
       return true;
     }
@@ -398,92 +621,111 @@ export function WorkspacePage() {
   async function send(text: string, explicitWorkflow?: WorkflowKind) {
     const prompt = text.trim();
     const current = projectRef.current;
-    if (!prompt || sending || !current) return;
+    if (!prompt || !current || isSessionSending(current.id)) return;
     const config = resolveLlmConfig();
     if (!isUsableLlmConfig(config)) {
-      setChat((previous) => [
-        ...previous,
-        { id: crypto.randomUUID(), role: "user", content: prompt },
-        { id: crypto.randomUUID(), role: "assistant", content: t("assistant.needConfig") },
-      ]);
+      updateChat(
+        (previous) => [
+          ...previous,
+          { id: crypto.randomUUID(), role: "user", content: prompt },
+          { id: crypto.randomUUID(), role: "assistant", content: t("assistant.needConfig") },
+        ],
+        { persist: true },
+      );
       setDraft("");
       setProviderOpen(true);
       return;
     }
 
-    const userMessage: ChatMessage = {
-      id: crypto.randomUUID(),
-      role: "user",
-      content: prompt,
-    };
-    const thinkingId = crypto.randomUUID();
-    setChat((previous) => [
-      ...previous,
-      userMessage,
-      { id: thinkingId, role: "assistant", content: t("assistant.thinking") },
-    ]);
+    const requestProjectId = current.id;
+    const requestFiles = { ...current.files };
+    const requestMainFile = mainFileFor(current);
+    const requestActiveFile = activeFile;
+    const requestSelection = selection;
+    const requestCompileLog = lastCompileLog;
+    const selectedText = requestSelection
+      ? requestFiles[requestActiveFile]?.slice(requestSelection.start, requestSelection.end)
+      : undefined;
+    const history = toLlmHistory(getSessionChat(requestProjectId), prompt);
+    const requestMemory = loadProjectMemory(requestProjectId);
+
+    const reviewChip = t("assistant.qReview");
+    const polishChip = t("assistant.q1");
+    const logicChip = t("assistant.q2");
+    const citeChip = t("assistant.q3");
+    const compileChip = t("assistant.q4");
+    const forceReview = prompt === reviewChip || prompt === t("assistant.review.q1");
+    const chipWorkflow: WorkflowKind | undefined = forceReview
+      ? "review"
+      : prompt === polishChip
+        ? "polish"
+        : prompt === citeChip
+          ? "citation"
+          : prompt === compileChip || prompt === t("assistant.demo.q4")
+            ? "compile-fix"
+            : prompt === logicChip
+              ? "review"
+              : undefined;
+    const chipUserText = forceReview
+      ? t("assistant.review.q1")
+      : prompt === logicChip
+        ? t("assistant.q2.prompt")
+        : prompt === polishChip
+          ? t("assistant.q1.prompt")
+          : prompt === citeChip
+            ? t("assistant.q3.prompt")
+            : prompt;
     setDraft("");
     setSending(true);
-    const history: ChatRequestMessage[] = [...chat, userMessage]
-      .filter((message) => message.id !== "a1")
-      .slice(-12)
-      .map((message) => ({ role: message.role, content: message.content }));
 
     try {
-      const reviewChip = t("assistant.qReview");
-      const forceReview = prompt === reviewChip || prompt === t("assistant.review.q1");
-      const requestProject = projectRef.current;
-      if (!requestProject) return;
-      const selectedText = selection
-        ? requestProject.files[activeFile]?.slice(selection.start, selection.end)
-        : undefined;
-      const result = await runAssistant({
-        mode: "assistant",
+      await startProjectAssistant({
+        projectId: requestProjectId,
         config,
-        userText: forceReview ? t("assistant.review.q1") : prompt,
+        displayUserText: prompt,
+        userText: chipUserText,
         history,
-        workflow: explicitWorkflow ?? (forceReview ? "review" : "auto"),
+        workflow: explicitWorkflow ?? chipWorkflow ?? "auto",
+        thinkingLabel: t("assistant.thinking"),
+        mapError: llmErrorMessage,
         ctx: {
-          projectId: requestProject.id,
-          files: { ...requestProject.files },
-          ...(requestProject.mainFile ? { mainFile: requestProject.mainFile } : {}),
-          activeFile,
-          ...(selection ? { selection } : {}),
+          projectId: requestProjectId,
+          files: requestFiles,
+          mainFile: requestMainFile,
+          activeFile: requestActiveFile,
+          ...(requestSelection ? { selection: requestSelection } : {}),
           ...(selectedText !== undefined ? { selectedText } : {}),
-          ...(lastCompileLog ? { lastCompileLog } : {}),
+          ...(requestCompileLog ? { lastCompileLog: requestCompileLog } : {}),
+          ...(requestMemory ? { memoryNotes: requestMemory } : {}),
+        },
+        onComplete: async (result) => {
+          if (result.lastCompileLog && projectRef.current?.id === requestProjectId) {
+            setLastCompileLog(result.lastCompileLog);
+          }
+          if (result.pdfBase64) {
+            await persistCompiledPdf(
+              requestProjectId,
+              requestMainFile,
+              result.pdfBase64,
+              requestFiles,
+            );
+            if (projectRef.current?.id === requestProjectId) {
+              setPdfFromBase64(result.pdfBase64);
+              setCompiled(true);
+              setCompileFailed(false);
+            }
+          }
         },
       });
-      if (result.lastCompileLog) setLastCompileLog(result.lastCompileLog);
-      if (result.pdfBase64) setPdfFromBase64(result.pdfBase64);
-
-      const primarySuggestion = result.suggestions[0];
-      const extra = result.suggestions.slice(1).map((suggestion) => ({
-        id: crypto.randomUUID(),
-        role: "assistant" as const,
-        content: suggestion.title || "Additional suggestion",
-        suggestion,
-      }));
-      setChat((previous) => {
-        const next = previous.map((message) =>
-          message.id === thinkingId
-            ? { ...message, content: result.content, suggestion: primarySuggestion }
-            : message,
-        );
-        return extra.length ? [...next, ...extra] : next;
-      });
     } catch (error) {
-      setChat((previous) =>
-        previous.map((message) =>
-          message.id === thinkingId
-            ? { ...message, content: llmErrorMessage(error) }
-            : message,
-        ),
-      );
       if (error instanceof LlmClientError && error.code === "not_configured") {
         setProviderOpen(true);
       }
     } finally {
-      setSending(false);
+      if (projectRef.current?.id === requestProjectId) {
+        setSending(isSessionSending(requestProjectId));
+        setChat(getSessionChat(requestProjectId));
+      }
     }
   }
 
@@ -516,15 +758,17 @@ export function WorkspacePage() {
       });
       if (!result.ok) {
         flash(result.error.message);
-        setChat((messages) =>
-          withSuggestionStatus(messages, message.id, { patchError: result.error }),
+        updateChat(
+          (messages) => withSuggestionStatus(messages, message.id, { patchError: result.error }),
+          { persist: true },
         );
         return;
       }
       if (result.target) setActiveFile(result.target);
       setSelection(undefined);
-      setChat((messages) =>
-        withSuggestionStatus(messages, message.id, result.suggestionPatch),
+      updateChat(
+        (messages) => withSuggestionStatus(messages, message.id, result.suggestionPatch),
+        { persist: true },
       );
       setCompiled(false);
       flash(t("workspace.toastKept"));
@@ -543,8 +787,10 @@ export function WorkspacePage() {
     const suggestion = message.suggestion;
     if (!suggestion) return;
     if (suggestion.status !== "applied") {
-      setChat((messages) =>
-        withSuggestionStatus(messages, message.id, { status: "dismissed" }),
+      updateChat(
+        (messages) =>
+          withSuggestionStatus(messages, message.id, { status: "dismissed" }),
+        { persist: true },
       );
       flash(t("workspace.toastDismissed"));
       return;
@@ -562,8 +808,9 @@ export function WorkspacePage() {
       }
       if (suggestion.appliedTo) setActiveFile(suggestion.appliedTo);
       setSelection(undefined);
-      setChat((messages) =>
-        withSuggestionStatus(messages, message.id, result.suggestionPatch),
+      updateChat(
+        (messages) => withSuggestionStatus(messages, message.id, result.suggestionPatch),
+        { persist: true },
       );
       setCompiled(false);
       flash(t("workspace.toastUndone"));
@@ -645,6 +892,13 @@ export function WorkspacePage() {
           onSelect={(path) => {
             setActiveFile(path);
             setSelection(undefined);
+            const content = projectRef.current?.files[path];
+            const bytes = content ? decodeBinaryFile(content) : null;
+            if (bytes) {
+              setPdfFromBytes(bytes);
+              setCompiled(true);
+              setCompileFailed(false);
+            }
           }}
           accountLabel={
             auth.status === "authenticated"
@@ -685,6 +939,11 @@ export function WorkspacePage() {
                 onKeep={(message) => void keepSuggestion(message)}
                 onUndo={(message) => void undoSuggestion(message)}
                 sending={sending}
+                memoryNotes={memoryNotes}
+                onMemoryNotesChange={(notes) => {
+                  setMemoryNotes(notes);
+                  if (project.id) saveProjectMemory(project.id, notes);
+                }}
               />
             )}
           </div>

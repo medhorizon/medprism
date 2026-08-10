@@ -6,6 +6,7 @@ import {
   detectSkillIntent,
   routeWorkflow,
   type SkillIntent,
+  type WorkflowRoute,
 } from "./skillRouter";
 import { enrichSuggestion } from "./suggestions";
 import { executeWorkflow } from "./workflows/executor";
@@ -29,14 +30,13 @@ export type RuntimeRequest = {
   userText: string;
   history: ChatRequestMessage[];
   ctx: ToolContext;
-  /** Preferred Plan07 explicit UI action. */
+  /** Preferred explicit UI action. */
   workflow?: "auto" | WorkflowKind;
   /** Deprecated compatibility input; mapped to a WorkflowKind by the router. */
   intent?: "auto" | SkillIntent | "general";
 };
 
 export type RuntimeResult = {
-  /** Validated typed workflow result; UI may progressively render report/evidence panels. */
   agent: AgentResult;
   content: string;
   suggestions: NonNullable<ChatMessage["suggestion"]>[];
@@ -57,18 +57,29 @@ function asSuggestion(patchSet: NonNullable<ChatSuggestion["patchSet"]>): ChatSu
 
 function workflowRequestFromRuntime(
   req: RuntimeRequest,
-  kind: WorkflowKind,
-  reviseProse: boolean,
+  route: WorkflowRoute,
 ): WorkflowRequest {
+  const selectionTarget =
+    !route.plan.target &&
+    req.ctx.selection &&
+    (route.kind === "writing" || route.kind === "polish")
+      ? { kind: "selection" as const }
+      : undefined;
+  const plan = {
+    ...route.plan,
+    ...(selectionTarget ? { target: selectionTarget } : {}),
+  };
+
   return {
-    kind,
+    kind: route.kind,
     userText: req.userText,
     ...(req.ctx.activeFile ? { activeFile: req.ctx.activeFile } : {}),
     ...(req.ctx.selectedText !== undefined ? { selectedText: req.ctx.selectedText } : {}),
     ...(req.ctx.selection ? { selection: { ...req.ctx.selection } } : {}),
     ...(req.ctx.mainFile ? { mainFile: req.ctx.mainFile } : {}),
     ...(req.ctx.lastCompileLog ? { lastCompileLog: req.ctx.lastCompileLog } : {}),
-    ...(reviseProse ? { reviseProse: true } : {}),
+    ...(route.reviseProse ? { reviseProse: true } : {}),
+    plan,
   };
 }
 
@@ -80,11 +91,11 @@ export async function runAssistant(req: RuntimeRequest): Promise<RuntimeResult> 
       : undefined;
   const route = routeWorkflow({
     text: req.userText,
-    explicitWorkflow,
-    legacyIntent: req.intent,
+    ...(explicitWorkflow ? { explicitWorkflow } : {}),
+    ...(req.intent !== undefined ? { legacyIntent: req.intent } : {}),
   });
   const result = await executeWorkflow({
-    request: workflowRequestFromRuntime(req, route.kind, route.reviseProse),
+    request: workflowRequestFromRuntime(req, route),
     config: req.config,
     history: req.history,
     ctx: req.ctx,

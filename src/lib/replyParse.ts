@@ -22,7 +22,12 @@ export type ModelWorkflowEnvelope = {
   warnings: string[];
   content: string;
   proposal?: ModelPatchProposal;
+  textDraftValue?: unknown;
+  /** Compatibility alias retained for Plan07.1 tests/callers. */
+  writingDraftValue?: unknown;
+  researchUseValue?: unknown;
   citationPlanValue?: unknown;
+  researchReportValue?: unknown;
   reviewValue?: unknown;
 };
 
@@ -57,10 +62,11 @@ function stringArray(value: unknown): string[] | null {
   return [...value];
 }
 
-/**
- * Strict Plan07 model-envelope parser. It never upgrades model-supplied runtime
- * metadata into a Keep-eligible PatchSet.
- */
+function hasPayload(value: unknown): boolean {
+  return value !== undefined && value !== null;
+}
+
+/** Strict typed model-envelope parser. Runtime metadata never comes from the model. */
 export function parseModelWorkflowEnvelope(
   raw: string,
   expectedWorkflow: WorkflowKind,
@@ -80,7 +86,7 @@ export function parseModelWorkflowEnvelope(
 
   const record = value as Record<string, unknown>;
   if (record.schemaVersion !== "1") {
-    return invalidWorkflowResult("Workflow result schemaVersion must be \"1\"", raw);
+    return invalidWorkflowResult('Workflow result schemaVersion must be "1"', raw);
   }
   if (record.workflow !== expectedWorkflow) {
     return invalidWorkflowResult(
@@ -101,18 +107,28 @@ export function parseModelWorkflowEnvelope(
       raw,
     );
   }
+  if (hasPayload(record.textDraft) && hasPayload(record.writingDraft)) {
+    return invalidWorkflowResult("Use textDraft only; do not return both textDraft and legacy writingDraft", raw);
+  }
 
+  const textDraftValue = hasPayload(record.textDraft)
+    ? record.textDraft
+    : hasPayload(record.writingDraft)
+      ? record.writingDraft
+      : undefined;
   const payloadCount = [
-    record.patchProposal !== undefined,
-    record.citationPlan !== undefined,
-    record.review !== undefined,
+    hasPayload(record.patchProposal),
+    hasPayload(textDraftValue),
+    hasPayload(record.citationPlan),
+    hasPayload(record.researchReport),
+    hasPayload(record.review),
   ].filter(Boolean).length;
   if (payloadCount > 1) {
     return invalidWorkflowResult("Workflow result must contain at most one typed payload", raw);
   }
 
   let proposal: ModelPatchProposal | undefined;
-  if (record.patchProposal !== undefined) {
+  if (hasPayload(record.patchProposal)) {
     const parsed = parseModelPatchProposal(record.patchProposal);
     if (!parsed.ok) {
       return { ok: false, error: parsed.error, rawContent: raw.trim() };
@@ -129,10 +145,20 @@ export function parseModelWorkflowEnvelope(
       warnings,
       content: typeof record.content === "string" ? record.content.trim() : "",
       ...(proposal ? { proposal } : {}),
-      ...(record.citationPlan !== undefined
+      ...(hasPayload(textDraftValue)
+        ? {
+            textDraftValue,
+            ...(hasPayload(record.writingDraft) ? { writingDraftValue: record.writingDraft } : {}),
+          }
+        : {}),
+      ...(hasPayload(record.researchUse) ? { researchUseValue: record.researchUse } : {}),
+      ...(hasPayload(record.citationPlan)
         ? { citationPlanValue: record.citationPlan }
         : {}),
-      ...(record.review !== undefined ? { reviewValue: record.review } : {}),
+      ...(hasPayload(record.researchReport)
+        ? { researchReportValue: record.researchReport }
+        : {}),
+      ...(hasPayload(record.review) ? { reviewValue: record.review } : {}),
     },
   };
 }
@@ -146,12 +172,12 @@ export function parseProposalEnvelope(raw: string): ProposalEnvelope {
     const envelope = parsed as Record<string, unknown>;
     const content = typeof envelope.content === "string" ? envelope.content : "";
 
-    if (envelope.patchProposal !== undefined) {
+    if (hasPayload(envelope.patchProposal)) {
       const proposal = parseModelPatchProposal(envelope.patchProposal);
       if (!proposal.ok) return { content, error: proposal.error };
       return { content, proposal: proposal.proposal };
     }
-    if (envelope.patchSet !== undefined) {
+    if (hasPayload(envelope.patchSet)) {
       const patch = parsePatchSet(envelope.patchSet);
       if (!patch.ok) return { content, error: patch.error };
       return { content, patchSet: patch.patchSet };

@@ -1,6 +1,7 @@
 import academicPaperReviewerSkill from "../../../skills/academic-paper-reviewer/SKILL.md?raw";
 import { assertSafeProjectRelativePath } from "../projectPath";
 import { taggedPromptData } from "../promptData";
+import { compactPaperHits } from "../research/service";
 import { parseModelWorkflowEnvelope } from "../replyParse";
 import { buildWorkflowSystemPrompt } from "./prompt";
 import {
@@ -227,8 +228,23 @@ export const runReviewWorkflow: WorkflowHandler = async (input) => {
           workflow: "review",
           skillId: "academic-paper-reviewer",
           skill: academicPaperReviewerSkill,
+          capabilities: input.research ? ["research"] : [],
         }),
       },
+      ...(input.research
+        ? [{
+            role: "user" as const,
+            content: taggedPromptData(
+              "trusted_tool_results",
+              'source="paper_search"',
+              {
+                query: input.research.query,
+                purpose: input.research.purpose,
+                candidates: compactPaperHits(input.research.hits),
+              },
+            ),
+          }]
+        : []),
       ...input.history.slice(-6),
       { role: "user", content: reviewContext.prompt },
     ],
@@ -265,10 +281,16 @@ export const runReviewWorkflow: WorkflowHandler = async (input) => {
       schemaVersion: "1",
       workflow: "review",
       summary: report.summary,
-      warnings: report.warnings,
+      warnings: [...report.warnings, ...(input.research?.warnings ?? [])],
       review: report,
     },
     content: parsed.envelope.content || renderReview(report),
-    toolNotes: ["skill:academic-paper-reviewer", `review_files:${report.coverage.filesRead.length}`],
+    toolNotes: [
+      "skill:academic-paper-reviewer",
+      `review_files:${report.coverage.filesRead.length}`,
+      ...(input.research
+        ? [`research-consumed:${input.research.hits.length}`]
+        : []),
+    ],
   };
 };

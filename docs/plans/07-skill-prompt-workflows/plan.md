@@ -35,6 +35,7 @@ Router
 
 ```ts
 type WorkflowKind =
+  | "research"
   | "writing"
   | "polish"
   | "citation"
@@ -43,7 +44,7 @@ type WorkflowKind =
   | "review";
 ```
 
-Router 输出 Workflow，而不是把 Skill 名当业务流程。
+Router 输出 Workflow，而不是把 Skill 名当业务流程。Research 同时可以作为独立结果流程，或作为 Writing / Polish / Citation / Review 前的可复用阶段。
 
 ---
 
@@ -111,6 +112,7 @@ type WorkflowRequest = {
 
 Workflow Executor 决定：
 
+- 是否先运行独立 Research stage；
 - 需要哪个工具；
 - 需要哪个 Skill；
 - 中间结果是什么；
@@ -120,6 +122,16 @@ Workflow Executor 决定：
 ---
 
 ## 6. Skill 职责
+
+### research
+
+负责：
+
+- 程序化执行文献检索；
+- 产生可信、可复用的 ResearchBundle；
+- 独立使用时输出 ResearchReport，不修改文件。
+
+可组合为：`research + writing`、`research + polish`、`research + citation`、`research + review`。
 
 ### writing / polish
 
@@ -277,7 +289,9 @@ type AgentResult = {
 
 - [x] Router 返回 WorkflowKind。
 - [x] 有明确 Workflow executor。
-- [x] writing/citation/compile-fix/review 可独立测试。
+- [x] research/writing/polish/citation/compile-fix/review 可独立测试。
+- [x] Research 可作为独立前置阶段与 Writing / Polish / Citation / Review 组合。
+- [x] 所有产生文本修改的流程统一进入可信 LaTeX/Patch finalization。
 - [x] 当前步骤只加载必要 Skill。
 - [x] CitationPlan / PatchSet / ReviewReport 有明确 schema。
 - [x] deprecated/重复 Skill 不再同时生效。
@@ -292,7 +306,8 @@ type AgentResult = {
 - PR / Commit: pending repository write access
 - Removed from runtime: multi-Skill citation/compile-fix injection; deprecated `section-revise` and `literature-cite`
 - Route fixtures: requested 8 cases plus UI priority, commands, combined citation/polish, and venue ambiguity
-- Local offline regression: `64/64` tests passed
+- Local offline regression: `106/106` tests passed
+- Plan07.2: independent Research + general LaTeX target/apply architecture implemented
 - Official commands: pending `.github/workflows/plan07-verify.yml`
 - Detailed report: [`IMPLEMENTATION_REPORT.md`](./IMPLEMENTATION_REPORT.md)
 - Master Plan 状态已更新: [x]

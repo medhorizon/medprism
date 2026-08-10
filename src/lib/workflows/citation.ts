@@ -5,7 +5,6 @@ import { sha256Hex } from "../patch/hash";
 import { assertSafeProjectRelativePath } from "../projectPath";
 import { taggedPromptData } from "../promptData";
 import type { ModelPatchProposal, PatchSet, PatchValidationError, StructuredBibEntry } from "../patch/schema";
-import { validatePatchSet } from "../patch/validate";
 import { parseModelWorkflowEnvelope } from "../replyParse";
 import type { PaperHit } from "../../tools/types";
 import {
@@ -16,7 +15,10 @@ import {
   normalizeTitle,
   paperHitToStructuredBibEntry,
 } from "../../tools/bibtex";
+import { finalizePatchSet } from "./latexApply";
 import { buildWorkflowSystemPrompt } from "./prompt";
+import { validateProtectedTextReplacement } from "./textSafety";
+import { compactPaperHits } from "../research/service";
 import {
   emptyAgentResult,
   type CitationJudgement,
@@ -367,7 +369,7 @@ export function citationJudgementPrompt(snapshot: ContextSnapshot, hits: PaperHi
     taggedPromptData(
       "trusted_tool_results",
       'source="paper_search"',
-      { candidates: hits },
+      { candidates: compactPaperHits(hits) },
     ),
     taggedPromptData(
       "user_request",
@@ -375,29 +377,6 @@ export function citationJudgementPrompt(snapshot: ContextSnapshot, hits: PaperHi
       { text: "Evaluate citations for the selected claim only." },
     ),
   ].join("\n\n");
-}
-
-function isPaperSearchPayload(value: unknown): value is { hits: PaperHit[] } {
-  if (!value || typeof value !== "object") return false;
-  const hits = (value as { hits?: unknown }).hits;
-  if (!Array.isArray(hits)) return false;
-  const ids = new Set<string>();
-  return hits.every((hit) => {
-    if (!hit || typeof hit !== "object") return false;
-    const record = hit as { id?: unknown; title?: unknown; authors?: unknown };
-    if (
-      typeof record.id !== "string" ||
-      !record.id.trim() ||
-      typeof record.title !== "string" ||
-      !record.title.trim() ||
-      typeof record.authors !== "string" ||
-      ids.has(record.id)
-    ) {
-      return false;
-    }
-    ids.add(record.id);
-    return true;
-  });
 }
 
 function invalidCitationResult(message: string, content = ""): WorkflowResult {
@@ -408,58 +387,12 @@ function invalidCitationResult(message: string, content = ""): WorkflowResult {
   };
 }
 
-function tokenMultiset(text: string, pattern: RegExp): Map<string, number> {
-  const counts = new Map<string, number>();
-  for (const match of text.matchAll(pattern)) {
-    const token = match[0];
-    counts.set(token, (counts.get(token) ?? 0) + 1);
-  }
-  return counts;
-}
-
-function sameTokenMultiset(left: Map<string, number>, right: Map<string, number>): boolean {
-  if (left.size !== right.size) return false;
-  for (const [token, count] of left) {
-    if (right.get(token) !== count) return false;
-  }
-  return true;
-}
-
 /** Runtime guard for a combined “polish + cite” request. */
 export function validateCitationProseRevision(
   original: string,
   replacement: string,
 ): { ok: true } | { ok: false; message: string } {
-  if (!replacement.trim()) {
-    return { ok: false, message: "Citation prose revision must not be empty" };
-  }
-
-  const protectedLatex = /\\(?:cite\w*|ref|eqref|autoref|cref|Cref|label)\s*(?:\[[^\]]*\]\s*)*\{[^{}]*\}/g;
-  if (
-    !sameTokenMultiset(
-      tokenMultiset(original, protectedLatex),
-      tokenMultiset(replacement, protectedLatex),
-    )
-  ) {
-    return {
-      ok: false,
-      message: "Citation prose revision must preserve existing cite/ref/label commands exactly",
-    };
-  }
-
-  const scientificNumbers = /(?<![\p{L}\p{N}_])[-+]?\d+(?:[.,]\d+)*(?:\s*%|\s*(?:mg|g|kg|mL|L|mm|cm|m|km|s|min|h|day|days|week|weeks|month|months|year|years|Hz|kHz|MHz|GHz|°C|K|Pa|kPa|MPa|mmHg|µg|μg|nmol|mmol|mol))?/gu;
-  if (
-    !sameTokenMultiset(
-      tokenMultiset(original, scientificNumbers),
-      tokenMultiset(replacement, scientificNumbers),
-    )
-  ) {
-    return {
-      ok: false,
-      message: "Citation prose revision must preserve numerical values and units",
-    };
-  }
-  return { ok: true };
+  return validateProtectedTextReplacement(original, replacement);
 }
 
 function scopedRevisionProposal(
@@ -488,6 +421,7 @@ function scopedRevisionProposal(
 async function optionalProseRevision(
   input: Parameters<WorkflowHandler>[0],
   snapshot: ContextSnapshot,
+  hits: PaperHit[],
 ): Promise<{ replacementClaim?: string; warning?: string }> {
   if (!input.request.reviseProse) return {};
   const raw = await input.services.complete({
@@ -499,9 +433,18 @@ async function optionalProseRevision(
           workflow: "polish",
           skillId: "nature-polishing",
           skill: naturePolishingSkill,
+          capabilities: ["research", "latex-output"],
         }),
       },
       { role: "user", content: formatWorkspaceContext(snapshot) },
+      {
+        role: "user",
+        content: taggedPromptData(
+          "trusted_tool_results",
+          'source="research"',
+          { candidates: compactPaperHits(hits) },
+        ),
+      },
       {
         role: "user",
         content: [
@@ -533,18 +476,10 @@ export const runCitationWorkflow: WorkflowHandler = async (input) => {
     return invalidCitationResult("请先选中需要补充引用的具体论断。");
   }
 
-  const searched = await input.services.runTool(
-    "paper_search",
-    { query: snapshot.selectedText, pageSize: 8 },
-    input.ctx,
-  );
-  if (!searched.ok) {
-    return invalidCitationResult(`文献检索失败：${searched.error}。未生成任何引用。`);
+  const hits = input.research?.hits ?? [];
+  if (!input.research) {
+    return invalidCitationResult("Citation workflow requires the independent research stage.");
   }
-  if (!isPaperSearchPayload(searched.data)) {
-    return invalidCitationResult("文献检索工具返回了无效结构，未生成任何引用。");
-  }
-  const hits = searched.data.hits;
   if (!hits.length) {
     return invalidCitationResult("未找到足够相关的文献，未生成引用。");
   }
@@ -558,6 +493,7 @@ export const runCitationWorkflow: WorkflowHandler = async (input) => {
           workflow: "citation",
           skillId: "nature-citation",
           skill: natureCitationSkill,
+          capabilities: ["research", "latex-output"],
         }),
       },
       { role: "user", content: citationJudgementPrompt(snapshot, hits) },
@@ -565,7 +501,11 @@ export const runCitationWorkflow: WorkflowHandler = async (input) => {
   });
   const parsed = parseModelWorkflowEnvelope(raw, "citation");
   if (!parsed.ok) return invalidCitationResult(parsed.error.message, parsed.rawContent);
-  if (parsed.envelope.proposal || parsed.envelope.reviewValue !== undefined) {
+  if (
+    parsed.envelope.proposal ||
+    parsed.envelope.textDraftValue !== undefined ||
+    parsed.envelope.reviewValue !== undefined
+  ) {
     return invalidCitationResult(
       "Citation judgement returned a file-edit payload instead of a CitationPlan",
       parsed.envelope.content,
@@ -577,7 +517,7 @@ export const runCitationWorkflow: WorkflowHandler = async (input) => {
   const judged = parseCitationJudgements(parsed.envelope.citationPlanValue, hits);
   if (!judged.ok) return invalidCitationResult(judged.error.message, parsed.envelope.content);
 
-  const revision = await optionalProseRevision(input, snapshot);
+  const revision = await optionalProseRevision(input, snapshot, hits);
   const built = await buildCitationPatch({
     snapshot,
     hits,
@@ -591,14 +531,16 @@ export const runCitationWorkflow: WorkflowHandler = async (input) => {
   const workflowWarnings = [
     ...parsed.envelope.warnings,
     ...built.plan.warnings,
+    ...input.research.warnings,
     ...(revision.warning ? [revision.warning] : []),
   ];
-  const patch = built.patchSet;
+  let patch = built.patchSet;
   if (patch) {
-    const validated = await validatePatchSet({ ...snapshot.files }, patch);
-    if (!validated.ok) {
-      return invalidCitationResult(validated.error.message, parsed.envelope.content);
+    const finalized = await finalizePatchSet(snapshot, patch);
+    if (!finalized.ok) {
+      return invalidCitationResult(finalized.error.message, parsed.envelope.content);
     }
+    patch = finalized.patchSet;
   }
 
   const selectedSupportCount = built.plan.candidates.filter(
@@ -618,6 +560,6 @@ export const runCitationWorkflow: WorkflowHandler = async (input) => {
       ...(patch ? { patch } : {}),
     },
     content,
-    toolNotes: [`paper_search:${hits.length}`, "skill:nature-citation"],
+    toolNotes: [`research-consumed:${hits.length}`, "skill:nature-citation"],
   };
 };

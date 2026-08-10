@@ -1,12 +1,11 @@
 import fixCompileSkill from "../../../skills/fix-compile-errors/SKILL.md?raw";
 import { buildContextSnapshot, type ContextSnapshot } from "../context/snapshot";
 import { parseModelPatchProposal, type ModelPatchProposal, type PatchSet, type SourceRange } from "../patch/schema";
-import { hydratePatchProposal } from "../patch/hydrate";
-import { validatePatchSet } from "../patch/validate";
 import { parseModelWorkflowEnvelope } from "../replyParse";
 import { taggedPromptData } from "../promptData";
 import { firstRootCompileError } from "../../tools/parseCompileLog";
 import type { CompileLogError } from "../../tools/types";
+import { finalizeModelPatchProposal } from "./latexApply";
 import { buildWorkflowSystemPrompt } from "./prompt";
 import { emptyAgentResult, type WorkflowHandler, type WorkflowResult } from "./types";
 
@@ -167,15 +166,17 @@ export async function compileFixProposalToPatch(args: {
     ...parsed.proposal,
     operations: [{ ...operation, path }],
   };
-  const hydrated = await hydratePatchProposal(proposal, scopedSnapshot, {
+  const finalized = await finalizeModelPatchProposal({
+    snapshot: scopedSnapshot,
+    proposal,
     allowedPaths: [path],
     strictSelection: true,
     forceCompileVerification: true,
   });
-  if (!hydrated.ok) {
-    return { ok: false, code: hydrated.error.code, message: hydrated.error.message };
+  if (!finalized.ok) {
+    return { ok: false, code: finalized.error.code, message: finalized.error.message };
   }
-  return { ok: true, patchSet: hydrated.patchSet };
+  return { ok: true, patchSet: finalized.patchSet };
 }
 
 
@@ -252,10 +253,10 @@ export const runCompileFixWorkflow: WorkflowHandler = async (input) => {
 
   let snapshot: ContextSnapshot;
   try {
+    const { lastCompileLog: _lastCompileLog, ...contextWithoutLog } = input.ctx;
     snapshot = await buildContextSnapshot({
-      ...input.ctx,
+      ...contextWithoutLog,
       activeFile: diagnostic.file,
-      lastCompileLog: undefined,
     });
   } catch (error) {
     return invalidCompileFixResult(
@@ -310,11 +311,6 @@ export const runCompileFixWorkflow: WorkflowHandler = async (input) => {
   if (!converted.ok) {
     return invalidCompileFixResult(converted.message, parsed.envelope.content, log);
   }
-  const validated = await validatePatchSet({ ...snapshot.files }, converted.patchSet);
-  if (!validated.ok) {
-    return invalidCompileFixResult(validated.error.message, parsed.envelope.content, log);
-  }
-
   return {
     agent: {
       schemaVersion: "1",

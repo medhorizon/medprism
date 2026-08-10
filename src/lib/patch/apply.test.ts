@@ -155,7 +155,7 @@ describe("typed patch simulation", () => {
     const applied = await simulatePatchSet(files, patch);
     expect(applied.ok).toBe(true);
     if (!applied.ok) return;
-    expect(applied.simulation.nextFiles).toHaveProperty("references.bib");
+    expect(Object.hasOwn(applied.simulation.nextFiles, "references.bib")).toBe(true);
 
     const undone = await undoPatchSet(
       applied.simulation.nextFiles,
@@ -163,7 +163,7 @@ describe("typed patch simulation", () => {
       applied.simulation.postApplyHashes,
     );
     expect(undone.ok).toBe(true);
-    if (undone.ok) expect(undone.files).not.toHaveProperty("references.bib");
+    if (undone.ok) expect(Object.hasOwn(undone.files, "references.bib")).toBe(false);
   });
 
   it("fails all operations atomically when a later operation is invalid", async () => {

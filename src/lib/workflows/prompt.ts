@@ -1,13 +1,17 @@
 import basePolicy from "../../../prompts/system.med-writer.md?raw";
+import researchInstruction from "../../../prompts/workflows/research.md?raw";
 import writingInstruction from "../../../prompts/workflows/writing.md?raw";
 import polishInstruction from "../../../prompts/workflows/polish.md?raw";
 import citationInstruction from "../../../prompts/workflows/citation.md?raw";
 import latexInstruction from "../../../prompts/workflows/latex.md?raw";
 import compileFixInstruction from "../../../prompts/workflows/compile-fix.md?raw";
 import reviewInstruction from "../../../prompts/workflows/review.md?raw";
+import researchCapability from "../../../prompts/capabilities/research.md?raw";
+import latexOutputCapability from "../../../prompts/capabilities/latex-output.md?raw";
 import type { WorkflowKind } from "./types";
 
 const WORKFLOW_INSTRUCTIONS: Record<WorkflowKind, string> = {
+  research: researchInstruction,
   writing: writingInstruction,
   polish: polishInstruction,
   citation: citationInstruction,
@@ -16,14 +20,28 @@ const WORKFLOW_INSTRUCTIONS: Record<WorkflowKind, string> = {
   review: reviewInstruction,
 };
 
+const CAPABILITY_INSTRUCTIONS = {
+  research: researchCapability,
+  "latex-output": latexOutputCapability,
+} as const;
+
+export type PromptCapability = keyof typeof CAPABILITY_INSTRUCTIONS;
+
 export function buildWorkflowSystemPrompt(args: {
   workflow: WorkflowKind;
   skillId: string;
   skill: string;
+  /** Optional deterministic workflow variant, e.g. targeted text generation. */
+  instruction?: string;
+  capabilities?: PromptCapability[];
 }): string {
+  const capabilityBlocks = [...new Set(args.capabilities ?? [])].map(
+    (capability) => CAPABILITY_INSTRUCTIONS[capability].trim(),
+  );
   return [
     basePolicy.trim(),
-    WORKFLOW_INSTRUCTIONS[args.workflow].trim(),
+    (args.instruction ?? WORKFLOW_INSTRUCTIONS[args.workflow]).trim(),
+    ...capabilityBlocks,
     `# Selected skill: ${args.skillId}`,
     args.skill.trim(),
     "# Precedence",

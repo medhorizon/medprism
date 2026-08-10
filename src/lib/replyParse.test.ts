@@ -114,4 +114,39 @@ describe("assistant reply parsing", () => {
     expect(withCompilePolicy.ok).toBe(false);
   });
 
+  it("treats null optional payloads as omitted instead of leaking raw JSON", () => {
+    const parsed = parseModelWorkflowEnvelope(JSON.stringify({
+      schemaVersion: "1",
+      workflow: "writing",
+      summary: "Draft only",
+      warnings: [],
+      content: "A normal user-facing paragraph.",
+      patchProposal: null,
+    }), "writing");
+
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.envelope.proposal).toBeUndefined();
+    expect(parsed.envelope.content).toBe("A normal user-facing paragraph.");
+  });
+
+  it("accepts a single writingDraft payload for runtime-owned target insertion", () => {
+    const parsed = parseModelWorkflowEnvelope(JSON.stringify({
+      schemaVersion: "1",
+      workflow: "writing",
+      summary: "Draft abstract",
+      warnings: [],
+      writingDraft: {
+        kind: "abstract",
+        text: "A concise abstract.",
+        sourceCandidateIds: ["paper-1"],
+      },
+    }), "writing");
+
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.envelope.writingDraftValue).toBeDefined();
+    expect(parsed.envelope.proposal).toBeUndefined();
+  });
+
 });

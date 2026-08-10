@@ -1,19 +1,23 @@
-import scientificWritingSkill from "../../../skills/scientific-writing/SKILL.md?raw";
 import academicPaperSkill from "../../../skills/academic-paper/SKILL.md?raw";
 import latexPaperEnSkill from "../../../skills/latex-paper-en/SKILL.md?raw";
 import naturePolishingSkill from "../../../skills/nature-polishing/SKILL.md?raw";
 import natureWritingSkill from "../../../skills/nature-writing/SKILL.md?raw";
-import { buildContextSnapshot, formatWorkspaceContext, type ContextSnapshot } from "../context/snapshot";
-import { hydratePatchProposal } from "../patch/hydrate";
-import type { PatchSet } from "../patch/schema";
-import { validatePatchSet } from "../patch/validate";
-import { parseModelWorkflowEnvelope } from "../replyParse";
+import scientificWritingSkill from "../../../skills/scientific-writing/SKILL.md?raw";
+import {
+  buildContextSnapshot,
+  formatWorkspaceContext,
+  type ContextSnapshot,
+} from "../context/snapshot";
 import { taggedPromptData } from "../promptData";
+import { compactPaperHits, validateResearchUse } from "../research/service";
+import { parseModelWorkflowEnvelope } from "../replyParse";
 import {
   detectWritingDomain,
   isNatureWritingRequest,
 } from "../skillRouter";
+import { finalizeModelPatchProposal } from "./latexApply";
 import { buildWorkflowSystemPrompt } from "./prompt";
+import { runTargetedTextWorkflow } from "./textWriting";
 import {
   emptyAgentResult,
   type WorkflowExecutionInput,
@@ -50,19 +54,18 @@ export function selectedWritingSkill(input: WorkflowExecutionInput): {
 function invalidModelResult(
   kind: WorkflowKind,
   message: string,
-  content: string,
 ): WorkflowResult {
   return {
     agent: emptyAgentResult(kind, "Structured model result was rejected", [message]),
-    content: content || `模型结果未通过结构化验证：${message}`,
-    toolNotes: [],
+    content: `模型结果未通过安全验证，未生成可 Keep 的修改：${message}`,
+    toolNotes: [`model-result-rejected:${message}`],
   };
 }
 
 export const runWritingWorkflow: WorkflowHandler = async (input) => {
   const kind = input.request.kind;
   if (!WRITING_KINDS.has(kind)) {
-    return invalidModelResult(kind, `Writing handler cannot execute ${kind}`, "");
+    return invalidModelResult(kind, `Writing handler cannot execute ${kind}`);
   }
 
   let snapshot: ContextSnapshot;
@@ -72,18 +75,42 @@ export const runWritingWorkflow: WorkflowHandler = async (input) => {
     return invalidModelResult(
       kind,
       error instanceof Error ? error.message : String(error),
-      "",
     );
   }
   const skill = selectedWritingSkill(input);
+  const target = input.request.plan?.target;
+
+  // All runtime-locatable prose targets use the same trusted LaTeX adapter.
+  if ((kind === "writing" || kind === "polish") && target) {
+    return runTargetedTextWorkflow({ input, snapshot, skill, targetSpec: target });
+  }
+
   const system = buildWorkflowSystemPrompt({
     workflow: kind,
     skillId: skill.id,
     skill: skill.text,
+    capabilities: [
+      ...(input.research ? ["research" as const] : []),
+      "latex-output",
+    ],
   });
   const messages = [
     { role: "system" as const, content: system },
     { role: "user" as const, content: formatWorkspaceContext(snapshot) },
+    ...(input.research
+      ? [{
+          role: "user" as const,
+          content: taggedPromptData(
+            "trusted_tool_results",
+            'source="paper_search"',
+            {
+              query: input.research.query,
+              purpose: input.research.purpose,
+              candidates: compactPaperHits(input.research.hits),
+            },
+          ),
+        }]
+      : []),
     ...input.history.slice(-10),
     {
       role: "user" as const,
@@ -92,46 +119,84 @@ export const runWritingWorkflow: WorkflowHandler = async (input) => {
   ];
   const raw = await input.services.complete({ config: input.config, messages });
   const parsed = parseModelWorkflowEnvelope(raw, kind);
-  if (!parsed.ok) {
-    return invalidModelResult(kind, parsed.error.message, parsed.rawContent);
-  }
-  if (parsed.envelope.citationPlanValue !== undefined || parsed.envelope.reviewValue !== undefined) {
+  if (!parsed.ok) return invalidModelResult(kind, parsed.error.message);
+  if (
+    parsed.envelope.textDraftValue !== undefined ||
+    parsed.envelope.citationPlanValue !== undefined ||
+    parsed.envelope.researchReportValue !== undefined ||
+    parsed.envelope.reviewValue !== undefined
+  ) {
     return invalidModelResult(
       kind,
-      `${kind} workflow returned a payload owned by another workflow`,
-      parsed.envelope.content,
+      `${kind} workflow returned a payload owned by another workflow or requires a runtime target`,
     );
   }
 
-  let patch: PatchSet | undefined;
-  if (parsed.envelope.proposal) {
-    const allowedPaths = kind === "latex" && snapshot.mainFile && !snapshot.selection
-      ? [...new Set([snapshot.activeFile, snapshot.mainFile])]
-      : [snapshot.activeFile];
-    const hydrated = await hydratePatchProposal(parsed.envelope.proposal, snapshot, {
-      strictSelection: Boolean(snapshot.selection),
-      allowedPaths,
-      forceCompileVerification: kind === "latex",
-    });
-    if (!hydrated.ok) {
-      return invalidModelResult(kind, hydrated.error.message, parsed.envelope.content);
+  if (input.research && parsed.envelope.proposal) {
+    if (parsed.envelope.researchUseValue === undefined) {
+      return invalidModelResult(
+        kind,
+        "Research-assisted source edits must declare researchUse.sourceCandidateIds",
+      );
     }
-    const validated = await validatePatchSet({ ...snapshot.files }, hydrated.patchSet);
-    if (!validated.ok) {
-      return invalidModelResult(kind, validated.error.message, parsed.envelope.content);
-    }
-    patch = hydrated.patchSet;
+    const use = validateResearchUse(
+      parsed.envelope.researchUseValue,
+      input.research,
+      true,
+    );
+    if (!use.ok) return invalidModelResult(kind, use.message);
+  } else if (!input.research && parsed.envelope.researchUseValue !== undefined) {
+    return invalidModelResult(
+      kind,
+      "A non-research workflow must not claim trusted research candidates",
+    );
   }
+
+  const proposal = parsed.envelope.proposal;
+  if (!proposal) {
+    return {
+      agent: emptyAgentResult(kind, parsed.envelope.summary, [
+        ...parsed.envelope.warnings,
+        ...(input.research?.warnings ?? []),
+      ]),
+      content: parsed.envelope.content || parsed.envelope.summary,
+      toolNotes: [
+        `workflow:${kind}:no-patch`,
+        `skill:${skill.id}`,
+        ...(input.research
+          ? [`research:${input.research.query}:${input.research.hits.length}`]
+          : []),
+      ],
+    };
+  }
+
+  const allowedPaths = kind === "latex" && snapshot.mainFile && !snapshot.selection
+    ? [...new Set([snapshot.activeFile, snapshot.mainFile])]
+    : [snapshot.activeFile];
+  const finalized = await finalizeModelPatchProposal({
+    snapshot,
+    proposal,
+    strictSelection: Boolean(snapshot.selection),
+    allowedPaths,
+    forceCompileVerification: kind === "latex",
+  });
+  if (!finalized.ok) return invalidModelResult(kind, finalized.error.message);
 
   return {
     agent: {
       schemaVersion: "1",
       workflow: kind,
       summary: parsed.envelope.summary,
-      warnings: parsed.envelope.warnings,
-      ...(patch ? { patch } : {}),
+      warnings: [...parsed.envelope.warnings, ...(input.research?.warnings ?? [])],
+      patch: finalized.patchSet,
     },
     content: parsed.envelope.content || parsed.envelope.summary,
-    toolNotes: [`workflow:${kind}`, `skill:${skill.id}`],
+    toolNotes: [
+      `workflow:${kind}`,
+      `skill:${skill.id}`,
+      ...(input.research
+        ? [`research:${input.research.query}:${input.research.hits.length}`]
+        : []),
+    ],
   };
 };

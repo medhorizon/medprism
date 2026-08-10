@@ -25,4 +25,4 @@ Return one JSON object:
 }
 ```
 
-`patchProposal` is optional when no safe edit can be located. For a new local insertion, use one uniquely anchored `insert_before` or `insert_after` operation. Do not return `patch`, `patchSet`, hashes, revisions, `bib_add`, or a whole-file replacement.
+`patchProposal` is optional when no safe edit can be located. Omit the field entirely in that case; do not return `patchProposal: null`. For a new local insertion, use one uniquely anchored `insert_before` or `insert_after` operation. Do not return `patch`, `patchSet`, hashes, revisions, `bib_add`, or a whole-file replacement.

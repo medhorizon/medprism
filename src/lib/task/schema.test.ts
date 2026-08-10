@@ -49,6 +49,24 @@ describe("TaskSpec schema", () => {
     if (!parsed.ok) expect(parsed.message).toContain("forbidden");
   });
 
+  it("rejects unsupported fields under the strict TaskSpec schema", () => {
+    const parsed = parseTaskSpec(
+      JSON.stringify({
+        schemaVersion: "1",
+        action: "advice",
+        applyMode: "answer-only",
+        contentMode: "none",
+        scope: "active-file",
+        evidenceMode: "none",
+        targets: [],
+        confidence: 0.9,
+      }),
+      segments,
+    );
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) expect(parsed.message).toContain("unsupported field");
+  });
+
   it("rejects plain prose instead of surfacing JSON parser details", () => {
     const parsed = parseTaskSpec("已为你准备好伦理声明。", segments);
     expect(parsed.ok).toBe(false);
@@ -69,5 +87,19 @@ describe("TaskSpec schema", () => {
       segments,
     );
     expect(parsed.ok).toBe(false);
+  });
+
+  it("classifies generated ethics prose as draft, never section fill", () => {
+    const draft = JSON.stringify({
+      schemaVersion: "1",
+      action: "draft",
+      applyMode: "propose-patch",
+      contentMode: "generate",
+      scope: "targets",
+      evidenceMode: "none",
+      targets: [{ slot: "ethics", messageSegmentIds: [] }],
+    });
+    expect(parseTaskSpec(draft, segments).ok).toBe(true);
+    expect(parseTaskSpec(draft.replace('"draft"', '"fill-sections"'), segments).ok).toBe(false);
   });
 });

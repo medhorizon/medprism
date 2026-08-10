@@ -10,6 +10,10 @@ function unavailable(message: string): WorkflowResult {
   };
 }
 
+function asksForCurrentSubmissionPolicy(text: string): boolean {
+  return /(?:latest|current|up[- ]?to[- ]?date|submission (?:policy|guideline|requirement)|journal (?:policy|guideline|requirement)|最新|当前|投稿(?:政策|指南|要求)|期刊(?:政策|指南|要求))/i.test(text);
+}
+
 /** Plain-text, streamable, answer-only advice on resolved manuscript context. */
 export const runAdviceWorkflow: WorkflowHandler = async (input) => {
   const resolved = input.request.resolvedTask;
@@ -45,8 +49,12 @@ export const runAdviceWorkflow: WorkflowHandler = async (input) => {
       },
     ],
   });
-  const content = raw.trim();
-  if (!content) return unavailable("The model returned an empty answer");
+  const answer = raw.trim();
+  if (!answer) return unavailable("The model returned an empty answer");
+  const policyLimitation = asksForCurrentSubmissionPolicy(input.request.userText)
+    ? "Time-sensitive note: no official journal guideline source was retrieved for this answer; verify current submission requirements on the journal's official website."
+    : undefined;
+  const content = policyLimitation ? `${answer}\n\n${policyLimitation}` : answer;
   return {
     agent: {
       schemaVersion: "1",
@@ -55,6 +63,10 @@ export const runAdviceWorkflow: WorkflowHandler = async (input) => {
       warnings: resolved.warnings,
     },
     content,
-    toolNotes: [...resolved.toolNotes, "workflow:advice:plain-text"],
+    toolNotes: [
+      ...resolved.toolNotes,
+      "workflow:advice:plain-text",
+      ...(policyLimitation ? ["advice:current-policy-unverified"] : []),
+    ],
   };
 };

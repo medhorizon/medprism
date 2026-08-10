@@ -85,8 +85,9 @@ function targetedDraft(text: string, workflow: "writing" | "polish" = "writing",
 }
 
 describe("workflow executor", () => {
-  it("registers seven deterministic workflows, including independent research", () => {
+  it("registers eight deterministic workflows, including advice and independent research", () => {
     expect(listWorkflows().sort()).toEqual([
+      "advice",
       "citation",
       "compile-fix",
       "latex",

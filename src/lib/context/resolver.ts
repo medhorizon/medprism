@@ -185,6 +185,7 @@ export function resolveTaskContext(args: {
       `task-source:${interpreted.source}`,
       `task-repaired:${interpreted.repaired ? "yes" : "no"}`,
       `context-targets:${bindings.length}`,
+      `context-slots:${bindings.map((binding) => slotKey(binding.ref)).join(",") || "none"}`,
       `context-selection:${selection ? "yes" : "no"}`,
     ],
   };

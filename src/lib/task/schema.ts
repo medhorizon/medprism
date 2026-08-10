@@ -22,6 +22,11 @@ const FORBIDDEN_KEYS = new Set([
   "path", "range", "oldText", "newText", "anchor", "op", "baseSha256",
   "projectRevision", "patch", "patchSet", "patchProposal", "operations",
 ]);
+const TASK_KEYS = new Set([
+  "schemaVersion", "action", "applyMode", "contentMode", "scope",
+  "evidenceMode", "targets",
+]);
+const TARGET_KEYS = new Set(["slot", "title", "messageSegmentIds"]);
 
 export type ParseTaskSpecResult =
   | { ok: true; value: TaskSpec }
@@ -63,10 +68,12 @@ function parseTargets(value: unknown, allowedSegmentIds: Set<string>): TaskTarge
   for (const item of value) {
     if (!item || typeof item !== "object" || Array.isArray(item)) return null;
     const raw = item as Record<string, unknown>;
+    if (Object.keys(raw).some((key) => !TARGET_KEYS.has(key))) return null;
     if (typeof raw.slot !== "string") return null;
     const isCustom = raw.slot === "custom-section";
     if (!isCustom && !MANUSCRIPT_SLOT_KINDS.has(raw.slot as ManuscriptSlotKind)) return null;
     if (isCustom && (typeof raw.title !== "string" || !raw.title.trim())) return null;
+    if (!isCustom && raw.title !== undefined) return null;
     if (!Array.isArray(raw.messageSegmentIds) || raw.messageSegmentIds.some((id) => typeof id !== "string" || !allowedSegmentIds.has(id))) {
       return null;
     }
@@ -114,10 +121,12 @@ export function parseTaskSpec(
   if (forbidden) return { ok: false, message: `TaskSpec contains forbidden runtime field: ${forbidden}` };
   if (!value || typeof value !== "object" || Array.isArray(value)) return { ok: false, message: "TaskSpec must be an object" };
   const object = value as Record<string, unknown>;
+  const unexpected = Object.keys(object).find((key) => !TASK_KEYS.has(key));
+  if (unexpected) return { ok: false, message: `TaskSpec contains unsupported field: ${unexpected}` };
   const schemaVersion = object.schemaVersion === 1 ? "1" : object.schemaVersion;
   if (schemaVersion !== "1") return { ok: false, message: 'TaskSpec schemaVersion must be "1"' };
+  if (typeof object.action !== "string" || !ACTIONS.has(object.action as TaskAction)) return { ok: false, message: "TaskSpec action is invalid" };
   const action = lockedAction ?? object.action;
-  if (typeof action !== "string" || !ACTIONS.has(action as TaskAction)) return { ok: false, message: "TaskSpec action is invalid" };
   if (typeof object.applyMode !== "string" || !APPLY_MODES.has(object.applyMode as TaskApplyMode)) return { ok: false, message: "TaskSpec applyMode is invalid" };
   if (typeof object.contentMode !== "string" || !CONTENT_MODES.has(object.contentMode as TaskContentMode)) return { ok: false, message: "TaskSpec contentMode is invalid" };
   if (typeof object.scope !== "string" || !SCOPES.has(object.scope as TaskScope)) return { ok: false, message: "TaskSpec scope is invalid" };

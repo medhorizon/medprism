@@ -91,4 +91,34 @@ describe("runtime-owned semantic writing", () => {
       expect(next).toContain("\\item Data availability: All data are included in this article.");
     }
   });
+
+  it("refuses to guess a canonical target when Data availability is duplicated", async () => {
+    const duplicated = springer.replace(
+      "\\bibliography{refs}",
+      "\\section*{Data availability}\nA second statement.\n\\bibliography{refs}",
+    );
+    const snapshot = await buildContextSnapshot({ projectId: "p", files: { "main.tex": duplicated }, mainFile: "main.tex" });
+    const model = buildManuscriptModel(snapshot);
+    const resolved = resolveTaskContext({
+      snapshot,
+      model,
+      interpreted: {
+        spec: {
+          schemaVersion: "1",
+          action: "scaffold",
+          applyMode: "propose-patch",
+          contentMode: "blank",
+          scope: "targets",
+          evidenceMode: "none",
+          targets: [{ slot: "data-availability", messageSegmentIds: [] }],
+        },
+        segments: [],
+        source: "llm",
+        repaired: false,
+      },
+    });
+    expect(resolved.errors.join(" ")).toContain("multiple active occurrences");
+    const result = await runSemanticWriting(snapshot, resolved);
+    expect(result?.agent.patch).toBeUndefined();
+  });
 });

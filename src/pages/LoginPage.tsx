@@ -160,7 +160,7 @@ export function LoginPage() {
 
   function handleGuest() {
     continueAsGuest();
-    goProjects("setup=api");
+    goProjects();
   }
 
   return (

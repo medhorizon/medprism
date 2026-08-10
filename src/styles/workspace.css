@@ -341,6 +341,65 @@
   flex: none;
 }
 
+.ai-card-bar .panel-head-actions {
+  margin-left: auto;
+}
+
+.ai-memory {
+  flex: none;
+  display: grid;
+  gap: 6px;
+  padding: 0 12px 10px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.ai-memory-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-secondary);
+}
+
+.ai-memory-count {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--ink-tertiary, var(--ink-secondary));
+}
+
+.ai-memory-hint {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--ink-secondary);
+}
+
+.ai-memory-input {
+  width: 100%;
+  min-height: 72px;
+  resize: vertical;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  background: var(--canvas);
+  color: var(--ink);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.ai-memory-input:focus {
+  outline: none;
+  border-color: var(--ink-secondary);
+}
+
+.icon-btn[data-active="1"] {
+  color: var(--ink);
+  background: var(--press);
+}
+
 .mode-switch {
   display: flex;
   gap: 2px;
@@ -536,6 +595,11 @@
   color: var(--ink);
   background: var(--canvas);
   tab-size: 2;
+}
+
+.editor-binary {
+  color: var(--ink-secondary);
+  white-space: pre-wrap;
 }
 
 .editor::selection {

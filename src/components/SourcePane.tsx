@@ -1,6 +1,7 @@
 import type { ChangeEvent, SyntheticEvent } from "react";
 import { useI18n } from "../i18n/context";
 import type { TextSelection } from "../lib/context/snapshot";
+import { isBinaryFileContent } from "../lib/projectBinary";
 
 type SourcePaneProps = {
   fileName: string;
@@ -18,6 +19,7 @@ export function SourcePane({
   onFixWithAi,
 }: SourcePaneProps) {
   const { t } = useI18n();
+  const binary = isBinaryFileContent(value) || fileName.toLowerCase().endsWith(".pdf");
 
   function reportSelection(event: SyntheticEvent<HTMLTextAreaElement>) {
     const target = event.currentTarget;
@@ -57,18 +59,22 @@ export function SourcePane({
       <div className="editor-wrap">
         <div className="editor-meta">
           <strong>{fileName}</strong>
-          <span>· UTF-8</span>
-          <span>· LaTeX</span>
+          {binary ? <span>· PDF</span> : <span>· UTF-8</span>}
+          {binary ? null : <span>· LaTeX</span>}
         </div>
-        <textarea
-          className="editor"
-          spellCheck={false}
-          value={value}
-          onChange={change}
-          onSelect={reportSelection}
-          onKeyUp={reportSelection}
-          onMouseUp={reportSelection}
-        />
+        {binary ? (
+          <div className="editor editor-binary">{t("source.binaryPdf")}</div>
+        ) : (
+          <textarea
+            className="editor"
+            spellCheck={false}
+            value={value}
+            onChange={change}
+            onSelect={reportSelection}
+            onKeyUp={reportSelection}
+            onMouseUp={reportSelection}
+          />
+        )}
       </div>
     </div>
   );

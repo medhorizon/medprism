@@ -127,6 +127,8 @@ export const en: Messages = {
   "files.title": "Files",
   "source.title": "Source",
   "source.fixAi": "Fix with AI",
+  "source.binaryPdf":
+    "This is a compiled PDF. View it in the preview pane. Export ZIP includes the real PDF bytes.",
   "preview.title": "Preview",
   "preview.pages": "{n} / {n} pages",
   "preview.sourceChanged": "Source has changed.",
@@ -136,6 +138,11 @@ export const en: Messages = {
   "preview.pdfReady": "PDF preview",
   "preview.htmlFallback": "HTML placeholder (no PDF yet)",
   "assistant.title": "Assistant",
+  "assistant.memory": "Project memory",
+  "assistant.memoryHint":
+    "Optional. Journal target, terminology, and settled decisions — kept across restarts and injected into model context.",
+  "assistant.memoryPlaceholder":
+    "e.g. Target: Scientific Reports; prefer “cohort study” over causal wording; Methods in past tense…",
   "assistant.collapse": "Collapse",
   "assistant.resize": "Drag to resize",
   "assistant.you": "You",
@@ -149,9 +156,15 @@ export const en: Messages = {
   "assistant.send": "Send",
   "assistant.initial":
     "Your manuscript is loaded. Ask me to polish prose, align terminology, check citations and LaTeX, or tune wording for a target journal.",
-  "assistant.q1": "Polish the abstract",
-  "assistant.q2": "Check over-strong causal claims",
-  "assistant.q3": "Clean up reference formatting",
+  "assistant.q1": "Polish the article",
+  "assistant.q1.prompt":
+    "Polish the main prose in this manuscript without changing the strength of scientific claims.",
+  "assistant.q2": "Check logic",
+  "assistant.q2.prompt":
+    "Check the manuscript’s argumentative logic and flag over-strong or unsupported leaps.",
+  "assistant.q3": "Add citations",
+  "assistant.q3.prompt":
+    "Add citations for claims in this manuscript that need literature support.",
   "assistant.q4": "Diagnose compile warnings",
   "assistant.qReview": "Review paper",
   "assistant.review.q1":
@@ -171,6 +184,7 @@ export const en: Messages = {
   "assistant.errorUpstream":
     "Hosted upstream model is not configured. Set UPSTREAM_BASE_URL and UPSTREAM_API_KEY on the auth server.",
   "assistant.thinking": "Thinking…",
+  "assistant.interrupted": "Request interrupted (for example after switching projects). Send again.",
   "resize.files": "Resize files panel",
   "resize.preview": "Resize preview panel",
   "tpl.springer-nature-sn-jnl.name": "Springer Nature Journal",

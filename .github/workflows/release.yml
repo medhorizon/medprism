@@ -8,6 +8,9 @@ on:
 permissions:
   contents: write
 
+env:
+  TECTONIC_VERSION: "0.17.0"
+
 jobs:
   build:
     strategy:
@@ -16,10 +19,16 @@ jobs:
         include:
           - os: ubuntu-22.04
             script: electron:pack:linux
+            archive: tectonic-0.17.0-x86_64-unknown-linux-gnu.tar.gz
+            archiveSha256: 1a715688baf591e650c8aeb160ae934e181685eecbb38b317de30b269ac5d606
           - os: windows-latest
             script: electron:pack:win
+            archive: tectonic-0.17.0-x86_64-pc-windows-msvc.zip
+            archiveSha256: f61ce51f0b0ade1015b7de7ef368541c5424e9756ecbd0d7af97d6d48030845f
           - os: macos-14
             script: electron:pack:mac
+            archive: tectonic-0.17.0-aarch64-apple-darwin.tar.gz
+            archiveSha256: a3f1cac7c5678f01661a92212f58480ae3b0634115d880dbc59e2953ded45667
 
     runs-on: ${{ matrix.os }}
 
@@ -36,6 +45,56 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Verify tag matches package version
+        shell: bash
+        run: |
+          package_version="$(node -p "require('./package.json').version")"
+          test "$GITHUB_REF_NAME" = "v${package_version}"
+
+      - name: Bundle Tectonic (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $url = "https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%40${env:TECTONIC_VERSION}/${{ matrix.archive }}"
+          Invoke-WebRequest -Uri $url -OutFile tectonic.zip
+          $digest = (Get-FileHash tectonic.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($digest -ne "${{ matrix.archiveSha256 }}") { throw "Tectonic archive checksum mismatch" }
+          Expand-Archive tectonic.zip -DestinationPath .tectonic
+          New-Item -ItemType Directory -Force resources/tectonic/win32-x64 | Out-Null
+          $binary = Get-ChildItem .tectonic -Recurse -Filter tectonic.exe | Select-Object -First 1
+          if (-not $binary) { throw "Tectonic executable was not found in the official archive" }
+          Copy-Item $binary.FullName resources/tectonic/win32-x64/tectonic.exe
+
+      - name: Bundle Tectonic (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%40${TECTONIC_VERSION}/${{ matrix.archive }}"
+          curl --fail --location "$url" --output tectonic.tar.gz
+          echo "${{ matrix.archiveSha256 }}  tectonic.tar.gz" | sha256sum --check
+          mkdir -p .tectonic resources/tectonic/linux-x64
+          tar -xzf tectonic.tar.gz -C .tectonic
+          binary="$(find .tectonic -type f -name tectonic -print -quit)"
+          test -n "$binary"
+          cp "$binary" resources/tectonic/linux-x64/tectonic
+          chmod +x resources/tectonic/linux-x64/tectonic
+
+      - name: Bundle Tectonic (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          url="https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%40${TECTONIC_VERSION}/${{ matrix.archive }}"
+          curl --fail --location "$url" --output tectonic.tar.gz
+          echo "${{ matrix.archiveSha256 }}  tectonic.tar.gz" | shasum -a 256 --check
+          mkdir -p .tectonic resources/tectonic/darwin-arm64
+          tar -xzf tectonic.tar.gz -C .tectonic
+          binary="$(find .tectonic -type f -name tectonic -print -quit)"
+          test -n "$binary"
+          cp "$binary" resources/tectonic/darwin-arm64/tectonic
+          chmod +x resources/tectonic/darwin-arm64/tectonic
+
       - name: Build package
         run: npm run ${{ matrix.script }}
         env:
@@ -51,7 +110,7 @@ jobs:
             release/*portable*.exe
             release/*.dmg
             release/*.zip
-          if-no-files-found: warn
+          if-no-files-found: error
 
   publish:
     needs: build

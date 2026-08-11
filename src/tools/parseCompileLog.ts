@@ -8,7 +8,9 @@ function normalizedPath(value: string | undefined): string | undefined {
 }
 
 function isWarning(message: string): boolean {
-  return /warning|overfull|underfull|rerun to get cross-references right/i.test(message);
+  return /warning|overfull|underfull|rerun to get cross-references right|undefined citations?|undefined references?|citation.*undefined|citations? may have changed/i.test(
+    message,
+  );
 }
 
 /**

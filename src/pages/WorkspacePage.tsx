@@ -32,6 +32,7 @@ import {
   loadProjectPdf,
   saveProjectMemory,
 } from "../state/projectArtifacts";
+import { parseCompileLog } from "../tools/parseCompileLog";
 import {
   adoptProjectChat,
   getSessionChat,
@@ -86,6 +87,15 @@ function initialProject(projectId: string): Project | null {
   return getProject(projectId) ?? null;
 }
 
+function hasCitationWarnings(log: string): boolean {
+  return parseCompileLog(log).some(
+    (diagnostic) =>
+      diagnostic.severity === "warning" &&
+      /citation|reference/i.test(diagnostic.message) &&
+      /undefined|may have changed/i.test(diagnostic.message),
+  );
+}
+
 export function WorkspacePage() {
   const { projectId = "" } = useParams();
   const navigate = useNavigate();
@@ -99,7 +109,7 @@ export function WorkspacePage() {
   const [draft, setDraft] = useState("");
   const [memoryNotes, setMemoryNotes] = useState("");
   const [aiOpen, setAiOpen] = useState(true);
-  const [aiHeight, setAiHeight] = useState(280);
+  const [aiHeight, setAiHeight] = useState<number | "60%">("60%");
   const [filesWidth, setFilesWidth] = useState(220);
   const [previewWidth, setPreviewWidth] = useState(420);
   const [compiling, setCompiling] = useState(false);
@@ -256,6 +266,7 @@ export function WorkspacePage() {
 
     const next = initialProject(projectId);
     setProjectState(next);
+    setAiHeight("60%");
     setSelection(undefined);
     sizeWarningProjectRef.current = null;
     const storageError = getLastProjectStoreError();
@@ -537,7 +548,11 @@ export function WorkspacePage() {
         result.pdfBase64,
         latest.files,
       );
-      flash(t("workspace.toastCompiled"));
+      flash(
+        hasCitationWarnings(result.log)
+          ? "编译成功，但日志里还有未定义引用；PDF 里的问号通常表示 bibliography 还缺条目。"
+          : t("workspace.toastCompiled"),
+      );
       return true;
     }
     setCompileFailed(true);
@@ -741,6 +756,9 @@ export function WorkspacePage() {
               setPdfFromBase64(result.pdfBase64);
               setCompiled(true);
               setCompileFailed(false);
+            }
+            if (result.lastCompileLog && hasCitationWarnings(result.lastCompileLog)) {
+              flash("编译成功，但日志里还有未定义引用；PDF 里的问号通常表示 bibliography 还缺条目。");
             }
           }
         },

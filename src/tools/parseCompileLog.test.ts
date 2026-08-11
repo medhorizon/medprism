@@ -36,4 +36,19 @@ describe("compile log parser", () => {
     const root = firstRootCompileError("! Undefined control sequence\nl.4 \\bad");
     expect(root?.file).toBeUndefined();
   });
+
+  it("keeps undefined citation warnings visible", () => {
+    const log = [
+      "LaTeX Warning: Citation `RogersG2026diagnostic' on page 2 undefined on input line 57.",
+      "Package natbib Warning: There were undefined citations.",
+    ].join("\n");
+    const diagnostics = parseCompileLog(log);
+    expect(diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ severity: "warning" }),
+        expect.objectContaining({ severity: "warning" }),
+      ]),
+    );
+    expect(firstRootCompileError(log)).toBeUndefined();
+  });
 });

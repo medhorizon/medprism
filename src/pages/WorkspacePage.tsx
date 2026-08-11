@@ -20,7 +20,7 @@ import {
 } from "../lib/projectBinary";
 import { withSuggestionStatus } from "../lib/suggestions";
 import type { TextSelection } from "../lib/context/snapshot";
-import { confirmationControlForText, pendingTaskFromMessages } from "../lib/task/confirmation";
+import { confirmationControlForText, disambiguationChoiceForText, pendingDisambiguationFromMessages, pendingTaskFromMessages } from "../lib/task/confirmation";
 import { useI18n } from "../i18n/context";
 import { DEMO_PROJECT_ID } from "../data/sample";
 import { loadAuth } from "../state/auth";
@@ -623,16 +623,28 @@ export function WorkspacePage() {
     text: string,
     explicitWorkflow?: WorkflowKind,
     confirmationControl?: { taskId: string; action: "confirm" | "cancel" },
+    disambiguationControl?: { taskId: string; choiceId?: string; action?: "cancel" },
   ) {
     const prompt = text.trim();
     const current = projectRef.current;
     if (!prompt || !current || isSessionSending(current.id)) return;
     const sessionChat = getSessionChat(current.id);
     const activePending = pendingTaskFromMessages(sessionChat);
+    const activeDisambiguation = pendingDisambiguationFromMessages(sessionChat);
     const control = confirmationControl?.action ?? confirmationControlForText(prompt);
+    const disambiguationChoice = activeDisambiguation
+      ? disambiguationControl?.choiceId ?? disambiguationChoiceForText(prompt, activeDisambiguation)
+      : null;
     const validPendingControl = Boolean(
       activePending && control &&
       (!confirmationControl || confirmationControl.taskId === activePending.id),
+    ) || Boolean(
+      activeDisambiguation &&
+      (
+        (disambiguationControl && disambiguationControl.taskId === activeDisambiguation.id) ||
+        disambiguationChoice ||
+        control === "cancel"
+      ),
     );
     const config = resolveLlmConfig();
     if (!isUsableLlmConfig(config) && !validPendingControl) {
@@ -699,6 +711,7 @@ export function WorkspacePage() {
         history,
         workflow: explicitWorkflow ?? chipWorkflow ?? "auto",
         ...(confirmationControl ? { confirmationControl } : {}),
+        ...(disambiguationControl ? { disambiguationControl } : {}),
         thinkingLabel: t("assistant.thinking"),
         mapError: llmErrorMessage,
         ctx: {
@@ -958,6 +971,14 @@ export function WorkspacePage() {
                 onCancelConfirmation={(message) => {
                   const taskId = message.confirmation?.task.id;
                   if (taskId) void send(t("common.cancel"), undefined, { taskId, action: "cancel" });
+                }}
+                onSelectDisambiguation={(message, choiceId) => {
+                  const taskId = message.disambiguation?.task.id;
+                  if (taskId) void send("Select target", undefined, undefined, { taskId, choiceId });
+                }}
+                onCancelDisambiguation={(message) => {
+                  const taskId = message.disambiguation?.task.id;
+                  if (taskId) void send(t("common.cancel"), undefined, undefined, { taskId, action: "cancel" });
                 }}
                 sending={sending}
                 memoryNotes={memoryNotes}

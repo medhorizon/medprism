@@ -78,6 +78,7 @@ export type ManuscriptModel = {
   projectRevision: string;
   profile: TemplateProfileId;
   mainFile: string;
+  activePaths: string[];
   files: Readonly<Record<string, string>>;
   occurrences: ManuscriptOccurrence[];
   structuralNodes: StructuralNode[];

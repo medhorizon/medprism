@@ -23,6 +23,8 @@ type AssistantCardProps = {
   onUndo: (message: ChatMessage) => void;
   onConfirm: (message: ChatMessage) => void;
   onCancelConfirmation: (message: ChatMessage) => void;
+  onSelectDisambiguation: (message: ChatMessage, choiceId: string) => void;
+  onCancelDisambiguation: (message: ChatMessage) => void;
   sending?: boolean;
   memoryNotes?: string;
   onMemoryNotesChange?: (notes: string) => void;
@@ -124,6 +126,7 @@ export function AssistantCard(props: AssistantCardProps) {
             {props.chat.map((message) => {
               const suggestion = message.suggestion;
               const confirmation = message.confirmation;
+              const disambiguation = message.disambiguation;
               const status = suggestion?.status ?? "pending";
               const kept = status === "applied";
               const dismissed = status === "dismissed";
@@ -133,6 +136,31 @@ export function AssistantCard(props: AssistantCardProps) {
                 <div key={message.id} className={`msg ${message.role}`}>
                   <div className="msg-role">{message.role === "assistant" ? "MedPrism" : t("assistant.you")}</div>
                   <div className="msg-bubble">{message.content}</div>
+                  {disambiguation && disambiguation.status !== "superseded" && (
+                    <div className={`suggestion ${disambiguation.status === "selected" ? "is-kept" : ""}`}>
+                      <div className="suggestion-head">Choose target</div>
+                      <div className="suggestion-body">
+                        {disambiguation.task.choices.map((choice, index) => (
+                          <div key={choice.id}>
+                            {index + 1}. {choice.slot} · {choice.path}
+                            {choice.preview ? `\n${choice.preview}` : ""}
+                          </div>
+                        ))}
+                      </div>
+                      {disambiguation.status === "awaiting-disambiguation" ? (
+                        <div className="suggestion-actions">
+                          {disambiguation.task.choices.map((choice, index) => (
+                            <button className="btn btn-secondary" type="button" key={choice.id} onClick={() => props.onSelectDisambiguation(message, choice.id)}>
+                              {index + 1}
+                            </button>
+                          ))}
+                          <button className="btn btn-secondary" type="button" onClick={() => props.onCancelDisambiguation(message)}>{t("common.cancel")}</button>
+                        </div>
+                      ) : (
+                        <div className="suggestion-body">{disambiguation.status === "selected" ? "Target selected." : "Target selection cancelled."}</div>
+                      )}
+                    </div>
+                  )}
                   {confirmation && confirmation.status !== "superseded" && (
                     <div className={`suggestion ${confirmation.status === "confirmed" ? "is-kept" : ""}`}>
                       <div className="suggestion-head">{t("assistant.confirmTitle")}</div>

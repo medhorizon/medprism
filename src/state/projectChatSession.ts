@@ -4,8 +4,11 @@ import type { WorkflowKind } from "../lib/workflows/types";
 import type { ChatMessage } from "../types/chat";
 import { withConversationArtifacts } from "../lib/conversationArtifacts";
 import {
+  disambiguationChoiceForText,
   confirmationControlForText,
+  pendingDisambiguationFromMessages,
   pendingTaskFromMessages,
+  withDisambiguationStatus,
   withPendingStatus,
   type ConfirmationControl,
 } from "../lib/task/confirmation";
@@ -132,6 +135,7 @@ export type ProjectAssistantRequest = {
   mapError: (error: unknown) => string;
   onComplete?: (result: RuntimeResult) => void | Promise<void>;
   confirmationControl?: { taskId: string; action: ConfirmationControl };
+  disambiguationControl?: { taskId: string; choiceId?: string; action?: "cancel" };
 };
 
 /**
@@ -147,7 +151,11 @@ export async function startProjectAssistant(
   if (session.sending) return false;
 
   const activePending = pendingTaskFromMessages(session.messages);
+  const activeDisambiguation = pendingDisambiguationFromMessages(session.messages);
   const inferredControl = request.confirmationControl?.action ?? confirmationControlForText(request.displayUserText);
+  const inferredChoice = activeDisambiguation
+    ? disambiguationChoiceForText(request.displayUserText, activeDisambiguation)
+    : null;
   if (
     request.confirmationControl &&
     (!activePending || request.confirmationControl.taskId !== activePending.id)
@@ -155,8 +163,24 @@ export async function startProjectAssistant(
     // A stale card must never authorize, cancel, or supersede a newer task.
     return false;
   }
+  if (
+    request.disambiguationControl &&
+    (!activeDisambiguation || request.disambiguationControl.taskId !== activeDisambiguation.id)
+  ) {
+    return false;
+  }
   const resumeTask = activePending && inferredControl === "confirm" ? activePending : undefined;
   const cancelTask = activePending && inferredControl === "cancel" ? activePending : undefined;
+  const selectedChoiceId = activeDisambiguation
+    ? request.disambiguationControl?.choiceId ?? inferredChoice
+    : null;
+  const resumeDisambiguation = activeDisambiguation && selectedChoiceId
+    ? { task: activeDisambiguation, choiceId: selectedChoiceId }
+    : undefined;
+  const cancelDisambiguation = activeDisambiguation && (
+    request.disambiguationControl?.action === "cancel" ||
+    inferredControl === "cancel"
+  ) ? activeDisambiguation : undefined;
 
   if (activePending) {
     const status = resumeTask
@@ -165,6 +189,14 @@ export async function startProjectAssistant(
         ? "cancelled"
         : "superseded";
     session.messages = withPendingStatus(session.messages, activePending.id, status);
+  }
+  if (!activePending && activeDisambiguation) {
+    const status = resumeDisambiguation
+      ? "selected"
+      : cancelDisambiguation
+        ? "cancelled"
+        : "superseded";
+    session.messages = withDisambiguationStatus(session.messages, activeDisambiguation.id, status);
   }
 
   const userMessage: ChatMessage = withConversationArtifacts({
@@ -187,6 +219,27 @@ export async function startProjectAssistant(
           taskSource: "resumed",
           action: cancelTask.spec.action,
           targetCount: cancelTask.targets.length,
+        },
+      }),
+    ];
+    persistDurableChat(projectId, session.messages);
+    emit();
+    return true;
+  }
+  if (cancelDisambiguation) {
+    session.messages = [
+      ...session.messages,
+      userMessage,
+      withConversationArtifacts({
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: "Target selection cancelled; project files were not changed.",
+        execution: {
+          schemaVersion: "1",
+          outcome: "answer",
+          taskSource: "resumed",
+          action: cancelDisambiguation.spec.action,
+          targetCount: cancelDisambiguation.choices.length,
         },
       }),
     ];
@@ -222,6 +275,7 @@ export async function startProjectAssistant(
       workflow: request.workflow,
       ctx: request.ctx,
       ...(resumeTask ? { resumeTask } : {}),
+      ...(resumeDisambiguation ? { resumeDisambiguation } : {}),
       onDelta: (delta) => {
         if (!stillThisRun()) return;
         streamed += delta;
@@ -252,6 +306,9 @@ export async function startProjectAssistant(
     if (resumeTask && result.outcome === "blocked") {
       current.messages = withPendingStatus(current.messages, resumeTask.id, "expired");
     }
+    if (resumeDisambiguation && result.outcome === "blocked") {
+      current.messages = withDisambiguationStatus(current.messages, resumeDisambiguation.task.id, "expired");
+    }
     current.messages = [
       ...current.messages.map((message) =>
         message.id === thinkingId
@@ -262,6 +319,9 @@ export async function startProjectAssistant(
               suggestion: primarySuggestion,
               ...(result.confirmation
                 ? { confirmation: { task: result.confirmation, status: result.confirmation.status } }
+                : {}),
+              ...(result.disambiguation
+                ? { disambiguation: { task: result.disambiguation, status: result.disambiguation.status } }
                 : {}),
               execution: result.execution,
             })
@@ -285,6 +345,9 @@ export async function startProjectAssistant(
     const current = ensure(projectId);
     if (resumeTask) {
       current.messages = withPendingStatus(current.messages, resumeTask.id, "awaiting-confirmation");
+    }
+    if (resumeDisambiguation) {
+      current.messages = withDisambiguationStatus(current.messages, resumeDisambiguation.task.id, "awaiting-disambiguation");
     }
     current.messages = current.messages.map((message) =>
       message.id === thinkingId

@@ -13,7 +13,13 @@ const source = String.raw`\documentclass{article}
 Text.
 \end{document}`;
 
-function request(userText: string, conversation: ChatMessage[]) {
+function request(
+  userText: string,
+  conversation: ChatMessage[],
+  files: Record<string, string> = { "main.tex": source },
+  mainFile = "main.tex",
+  activeFile = mainFile,
+) {
   return {
     mode: "assistant" as const,
     config: { mode: "mock" as const },
@@ -23,9 +29,9 @@ function request(userText: string, conversation: ChatMessage[]) {
     workflow: "auto" as const,
     ctx: {
       projectId: "p",
-      files: { "main.tex": source },
-      mainFile: "main.tex",
-      activeFile: "main.tex",
+      files,
+      mainFile,
+      activeFile,
     },
   };
 }
@@ -144,6 +150,49 @@ describe("natural conversation file transactions", () => {
     if (simulated.ok) {
       expect(simulated.simulation.nextFiles["main.tex"]).toContain(`\\title{${payload.text}}`);
       expect(simulated.simulation.nextFiles["main.tex"]?.match(/\\title\b/g)).toHaveLength(1);
+    }
+  });
+
+  it("asks the user to choose when a real active manuscript graph has multiple title targets", async () => {
+    const files = {
+      "main.tex": "\\documentclass{article}\n\\begin{document}\n\\title{Main Title}\n\\input{front/title}\n\\end{document}",
+      "front/title.tex": "\\title{Included Title}",
+    };
+    const user = withConversationArtifacts({
+      id: "u-ambiguous-title",
+      role: "user",
+      content: "Change the title to Graph-Selected Title",
+    });
+    const payload = user.artifacts!.find((artifact) => artifact.kind === "assignment-value")!;
+    const conversation = [user];
+    const first = await runAssistant(request(user.content, conversation, files), {
+      interpret: async () => exactTitleTask(user.artifacts!, payload.id),
+    });
+    expect(first.outcome).toBe("disambiguation-required");
+    expect(first.suggestions).toEqual([]);
+    expect(first.disambiguation?.choices.map((choice) => choice.path)).toEqual([
+      "main.tex",
+      "front/title.tex",
+    ]);
+
+    const includedChoice = first.disambiguation!.choices.find((choice) => choice.path === "front/title.tex")!;
+    const selected = await runAssistant({
+      ...request("Select target", conversation, files),
+      resumeDisambiguation: { task: first.disambiguation!, choiceId: includedChoice.id },
+    });
+    expect(selected.outcome).toBe("confirmation-required");
+    expect(selected.confirmation?.targets[0]).toMatchObject({ path: "front/title.tex", preview: payload.text });
+
+    const confirmed = await runAssistant({
+      ...request("confirm", conversation, files),
+      resumeTask: selected.confirmation,
+    });
+    expect(confirmed.outcome).toBe("patch-proposed");
+    const simulated = await simulatePatchSet(files, confirmed.agent.patch!);
+    expect(simulated.ok).toBe(true);
+    if (simulated.ok) {
+      expect(simulated.simulation.nextFiles["main.tex"]).toContain("\\title{Main Title}");
+      expect(simulated.simulation.nextFiles["front/title.tex"]).toContain("\\title{Graph-Selected Title}");
     }
   });
 

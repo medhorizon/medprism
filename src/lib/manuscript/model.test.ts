@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildContextSnapshot } from "../context/snapshot";
+import { loadBundledOfficialTemplate } from "../../templates";
 import { buildManuscriptModel, occurrencesForSlot } from "./model";
 import type { TemplateProfileId } from "./types";
 
@@ -64,5 +65,36 @@ describe("ManuscriptModel official template corpus", () => {
     const model = buildManuscriptModel(snapshot);
     expect(occurrencesForSlot(model, { slot: "title" })).toHaveLength(1);
     expect(occurrencesForSlot(model, { slot: "custom-section", title: "Title Information" })).toHaveLength(1);
+  });
+
+  it("indexes only the active manuscript graph from a bundled template package", async () => {
+    const extracted = await loadBundledOfficialTemplate("springer-nature-sn-jnl");
+    const snapshot = await buildContextSnapshot({
+      projectId: "springer-bundled",
+      files: extracted.files,
+      mainFile: extracted.mainFile,
+      activeFile: extracted.mainFile,
+    });
+    const model = buildManuscriptModel(snapshot);
+    expect(model.activePaths).toEqual([extracted.mainFile]);
+    expect(occurrencesForSlot(model, { slot: "title" })).toHaveLength(1);
+    expect(model.diagnostics.filter((diagnostic) => diagnostic.code === "DUPLICATE_SLOT")).toEqual([]);
+  });
+
+  it("follows tex inputs that are part of the active manuscript graph", async () => {
+    const snapshot = await buildContextSnapshot({
+      projectId: "multi-file",
+      files: {
+        "main.tex": "\\documentclass{article}\n\\begin{document}\n\\input{front/title}\n\\section{Discussion}\nMain.\n\\end{document}",
+        "front/title.tex": "\\title{Included Title}",
+        "unused.tex": "\\title{Unused Package Example}",
+      },
+      mainFile: "main.tex",
+      activeFile: "main.tex",
+    });
+    const model = buildManuscriptModel(snapshot);
+    expect(model.activePaths).toEqual(["main.tex", "front/title.tex"]);
+    expect(occurrencesForSlot(model, { slot: "title" })).toHaveLength(1);
+    expect(occurrencesForSlot(model, { slot: "title" })[0]?.path).toBe("front/title.tex");
   });
 });

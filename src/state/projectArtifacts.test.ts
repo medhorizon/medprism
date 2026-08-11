@@ -165,6 +165,57 @@ describe("projectArtifacts", () => {
     });
   });
 
+  it("persists and restores a revision-bound pending target disambiguation", () => {
+    const storage = memoryStorage();
+    const artifacts = buildConversationArtifacts({ messageId: "u1", role: "user", content: "Change the title to New Title" });
+    const source = artifacts.find((artifact) => artifact.kind === "assignment-value")!;
+    const task = {
+      schemaVersion: "1" as const,
+      id: "disamb-1",
+      projectId: "proj-1",
+      projectRevision: "revision-1",
+      createdAt: new Date().toISOString(),
+      status: "awaiting-disambiguation" as const,
+      spec: {
+        schemaVersion: "2" as const,
+        action: "fill-sections" as const,
+        applyMode: "propose-patch" as const,
+        contentMode: "provided" as const,
+        scope: "targets" as const,
+        evidenceMode: "none" as const,
+        targets: [{ slot: "title" as const, sourceIds: [source.id] }],
+      },
+      sources: [source],
+      taskSource: "llm" as const,
+      repaired: false,
+      explicitlyAuthorized: false,
+      choices: [{
+        id: "choice-1",
+        targetIndex: 0,
+        occurrenceId: "slot:main",
+        slot: "Title",
+        path: "main.tex",
+        syntax: "command",
+        heading: "Title",
+      }],
+    };
+    const messages: ChatMessage[] = [
+      { id: "u1", role: "user", content: "Change the title to New Title", artifacts },
+      {
+        id: "a1",
+        role: "assistant",
+        content: "Choose target",
+        disambiguation: { task, status: "awaiting-disambiguation" },
+      },
+    ];
+    expect(saveProjectChat("proj-1", messages, storage)).toBe(true);
+    expect(loadProjectChat("proj-1", storage)?.[1]?.disambiguation?.task).toMatchObject({
+      id: "disamb-1",
+      choices: [{ id: "choice-1", path: "main.tex" }],
+      status: "awaiting-disambiguation",
+    });
+  });
+
   it("expires a restored pending task when its source message is unavailable", () => {
     const storage = memoryStorage();
     const artifacts = buildConversationArtifacts({ messageId: "missing", role: "assistant", content: "*Historical Title*" });

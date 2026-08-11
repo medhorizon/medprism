@@ -45,6 +45,58 @@ function pendingConfirmation(): ChatMessage {
   };
 }
 
+function pendingDisambiguation(): ChatMessage {
+  const sources = buildConversationArtifacts({ messageId: "u-edit", role: "user", content: "Change the title to New Title" });
+  const source = sources.find((artifact) => artifact.kind === "assignment-value")!;
+  const task = {
+    schemaVersion: "1" as const,
+    id: "disamb-1",
+    projectId: "a",
+    projectRevision: "revision-1",
+    createdAt: new Date().toISOString(),
+    status: "awaiting-disambiguation" as const,
+    spec: {
+      schemaVersion: "2" as const,
+      action: "fill-sections" as const,
+      applyMode: "propose-patch" as const,
+      contentMode: "provided" as const,
+      scope: "targets" as const,
+      evidenceMode: "none" as const,
+      targets: [{ slot: "title" as const, sourceIds: [source.id] }],
+    },
+    sources: [source],
+    taskSource: "llm" as const,
+    repaired: false,
+    explicitlyAuthorized: false,
+    choices: [
+      {
+        id: "choice-1",
+        targetIndex: 0,
+        occurrenceId: "slot:main",
+        slot: "Title",
+        path: "main.tex",
+        syntax: "command",
+        heading: "Title",
+      },
+      {
+        id: "choice-2",
+        targetIndex: 0,
+        occurrenceId: "slot:front",
+        slot: "Title",
+        path: "front/title.tex",
+        syntax: "command",
+        heading: "Title",
+      },
+    ],
+  };
+  return {
+    id: "a-disamb",
+    role: "assistant",
+    content: "Choose target",
+    disambiguation: { task, status: "awaiting-disambiguation" },
+  };
+}
+
 function answerResult(content = "done") {
   return {
     agent: { schemaVersion: "1" as const, workflow: "advice" as const, summary: "done", warnings: [] },
@@ -248,6 +300,42 @@ describe("projectChatSession", () => {
       mapError: String,
     })).toBe(true);
     expect(vi.mocked(runAssistant).mock.calls[0]?.[0].resumeTask?.id).toBe("task-1");
+  });
+
+  it("resumes a target disambiguation from a selected card option", async () => {
+    vi.mocked(runAssistant).mockResolvedValue(answerResult());
+    setSessionChat("a", [pendingDisambiguation()]);
+    await startProjectAssistant({
+      projectId: "a",
+      config: { mode: "mock" },
+      displayUserText: "Select target",
+      userText: "Select target",
+      history: [],
+      workflow: "auto",
+      disambiguationControl: { taskId: "disamb-1", choiceId: "choice-2" },
+      ctx: { projectId: "a", files: { "main.tex": "text" } },
+      thinkingLabel: "Thinking",
+      mapError: String,
+    });
+    expect(vi.mocked(runAssistant).mock.calls[0]?.[0].resumeDisambiguation?.choiceId).toBe("choice-2");
+    expect(getSessionChat("a")[0]?.disambiguation?.status).toBe("selected");
+  });
+
+  it("supersedes an unresolved target disambiguation on a new request", async () => {
+    vi.mocked(runAssistant).mockResolvedValue(answerResult());
+    setSessionChat("a", [pendingDisambiguation()]);
+    await startProjectAssistant({
+      projectId: "a",
+      config: { mode: "mock" },
+      displayUserText: "Use another title instead",
+      userText: "Use another title instead",
+      history: [],
+      workflow: "auto",
+      ctx: { projectId: "a", files: { "main.tex": "text" } },
+      thinkingLabel: "Thinking",
+      mapError: String,
+    });
+    expect(getSessionChat("a")[0]?.disambiguation?.status).toBe("superseded");
   });
 
   it("keeps a confirmed task retryable when execution fails before a PatchSet", async () => {

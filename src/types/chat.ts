@@ -45,6 +45,10 @@ export type PendingFileTask = {
   status: PendingFileTaskStatus;
   spec: TaskSpec;
   sources: ConversationArtifact[];
+  targetSelections?: Array<{
+    targetIndex: number;
+    occurrenceId: string;
+  }>;
   targets: Array<{
     id: string;
     slot: string;
@@ -65,8 +69,51 @@ export type ChatConfirmation = {
   status: PendingFileTaskStatus;
 };
 
+export type PendingDisambiguationTaskStatus =
+  | "awaiting-disambiguation"
+  | "selected"
+  | "cancelled"
+  | "superseded"
+  | "expired";
+
+export type PendingDisambiguationTask = {
+  schemaVersion: "1";
+  id: string;
+  projectId: string;
+  projectRevision: string;
+  createdAt: string;
+  status: PendingDisambiguationTaskStatus;
+  spec: TaskSpec;
+  sources: ConversationArtifact[];
+  taskSource: "llm" | "locked" | "runtime";
+  repaired: boolean;
+  explicitlyAuthorized: boolean;
+  choices: Array<{
+    id: string;
+    targetIndex: number;
+    occurrenceId: string;
+    slot: string;
+    path: string;
+    syntax: string;
+    heading: string;
+    preview?: string;
+  }>;
+  selection?: {
+    path: string;
+    start: number;
+    end: number;
+    textHash: string;
+  };
+};
+
+export type ChatDisambiguation = {
+  task: PendingDisambiguationTask;
+  status: PendingDisambiguationTaskStatus;
+};
+
 export type AssistantOutcomeKind =
   | "answer"
+  | "disambiguation-required"
   | "confirmation-required"
   | "patch-proposed"
   | "blocked";
@@ -102,6 +149,7 @@ export type ChatMessage = {
   content: string;
   suggestion?: ChatSuggestion | undefined;
   artifacts?: ConversationArtifact[] | undefined;
+  disambiguation?: ChatDisambiguation | undefined;
   confirmation?: ChatConfirmation | undefined;
   execution?: ChatExecution | undefined;
   /** True while an assistant reply is in flight; never persist as a finished answer. */

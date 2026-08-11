@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { confirmationControlForText } from "./confirmation";
+import { confirmationControlForText, disambiguationChoiceForText } from "./confirmation";
+import type { PendingDisambiguationTask } from "../../types/chat";
 
 describe("confirmation controls", () => {
   it.each(["确认", "继续", "好，继续", "confirm", "Proceed."])(
@@ -22,4 +23,34 @@ describe("confirmation controls", () => {
       expect(confirmationControlForText(text)).toBeNull();
     },
   );
+
+  it("recognizes a numeric disambiguation choice", () => {
+    const task: PendingDisambiguationTask = {
+      schemaVersion: "1",
+      id: "task",
+      projectId: "p",
+      projectRevision: "rev",
+      createdAt: new Date().toISOString(),
+      status: "awaiting-disambiguation",
+      spec: {
+        schemaVersion: "2",
+        action: "fill-sections",
+        applyMode: "propose-patch",
+        contentMode: "provided",
+        scope: "targets",
+        evidenceMode: "none",
+        targets: [],
+      },
+      sources: [],
+      taskSource: "runtime",
+      repaired: false,
+      explicitlyAuthorized: false,
+      choices: [
+        { id: "first", targetIndex: 0, occurrenceId: "a", slot: "Title", path: "main.tex", syntax: "command", heading: "Title" },
+        { id: "second", targetIndex: 0, occurrenceId: "b", slot: "Title", path: "front/title.tex", syntax: "command", heading: "Title" },
+      ],
+    };
+    expect(disambiguationChoiceForText("2", task)).toBe("second");
+    expect(disambiguationChoiceForText("choose 2 but shorten it", task)).toBeNull();
+  });
 });

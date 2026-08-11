@@ -1,8 +1,11 @@
 import type {
   ChatConfirmation,
+  ChatDisambiguation,
   ChatExecution,
   ChatMessage,
   ChatSuggestion,
+  PendingDisambiguationTask,
+  PendingDisambiguationTaskStatus,
   PendingFileTask,
   PendingFileTaskStatus,
 } from "../types/chat";
@@ -93,6 +96,9 @@ function slimSuggestion(suggestion: ChatSuggestion | undefined): ChatSuggestion 
 const PENDING_STATUSES = new Set<PendingFileTaskStatus>([
   "awaiting-confirmation", "confirmed", "cancelled", "superseded", "expired",
 ]);
+const DISAMBIGUATION_STATUSES = new Set<PendingDisambiguationTaskStatus>([
+  "awaiting-disambiguation", "selected", "cancelled", "superseded", "expired",
+]);
 const PENDING_OPERATIONS = new Set<PendingFileTask["targets"][number]["operation"]>([
   "generate", "replace", "insert", "scaffold", "cite", "repair",
 ]);
@@ -165,8 +171,9 @@ function normalizeConfirmation(value: unknown): ChatConfirmation | undefined {
   const parsed = parseTaskSpec(JSON.stringify(task.spec), sources.map((source) => source.id));
   if (!parsed.ok) return undefined;
   const targets = normalizePendingTargets(task.targets);
+  const targetSelections = normalizeTargetSelections(task.targetSelections);
   const selection = normalizePendingSelection(task.selection);
-  if (!targets || selection === null) return undefined;
+  if (!targets || targetSelections === null || selection === null) return undefined;
   const normalizedTask: PendingFileTask = {
     schemaVersion: "1",
     id: task.id,
@@ -176,10 +183,106 @@ function normalizeConfirmation(value: unknown): ChatConfirmation | undefined {
     status: task.status as PendingFileTaskStatus,
     spec: parsed.value,
     sources,
+    ...(targetSelections?.length ? { targetSelections } : {}),
     targets,
     ...(selection ? { selection } : {}),
   };
   return { task: normalizedTask, status: raw.status as PendingFileTaskStatus };
+}
+
+function normalizeTargetSelections(value: unknown): PendingFileTask["targetSelections"] | undefined | null {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) return null;
+  const selections: NonNullable<PendingFileTask["targetSelections"]> = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+    const raw = entry as Record<string, unknown>;
+    if (
+      !Number.isSafeInteger(raw.targetIndex) ||
+      Number(raw.targetIndex) < 0 ||
+      typeof raw.occurrenceId !== "string" ||
+      !raw.occurrenceId
+    ) return null;
+    selections.push({
+      targetIndex: Number(raw.targetIndex),
+      occurrenceId: raw.occurrenceId,
+    });
+  }
+  return selections;
+}
+
+function normalizeDisambiguationChoices(value: unknown): PendingDisambiguationTask["choices"] | null {
+  if (!Array.isArray(value)) return null;
+  const choices: PendingDisambiguationTask["choices"] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+    const choice = entry as Record<string, unknown>;
+    if (
+      typeof choice.id !== "string" || !choice.id ||
+      !Number.isSafeInteger(choice.targetIndex) || Number(choice.targetIndex) < 0 ||
+      typeof choice.occurrenceId !== "string" || !choice.occurrenceId ||
+      typeof choice.slot !== "string" || !choice.slot ||
+      typeof choice.path !== "string" || !choice.path ||
+      typeof choice.syntax !== "string" || !choice.syntax ||
+      typeof choice.heading !== "string" ||
+      (choice.preview !== undefined && typeof choice.preview !== "string")
+    ) return null;
+    choices.push({
+      id: choice.id,
+      targetIndex: Number(choice.targetIndex),
+      occurrenceId: choice.occurrenceId,
+      slot: choice.slot,
+      path: choice.path,
+      syntax: choice.syntax,
+      heading: choice.heading,
+      ...(typeof choice.preview === "string" ? { preview: choice.preview } : {}),
+    });
+  }
+  return choices;
+}
+
+function normalizeDisambiguation(value: unknown): ChatDisambiguation | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  if (!DISAMBIGUATION_STATUSES.has(raw.status as PendingDisambiguationTaskStatus)) return undefined;
+  if (!raw.task || typeof raw.task !== "object" || Array.isArray(raw.task)) return undefined;
+  const task = raw.task as Record<string, unknown>;
+  if (
+    task.schemaVersion !== "1" ||
+    typeof task.id !== "string" ||
+    typeof task.projectId !== "string" ||
+    typeof task.projectRevision !== "string" ||
+    typeof task.createdAt !== "string" ||
+    !DISAMBIGUATION_STATUSES.has(task.status as PendingDisambiguationTaskStatus) ||
+    !Array.isArray(task.sources) ||
+    !["llm", "locked", "runtime"].includes(String(task.taskSource)) ||
+    typeof task.repaired !== "boolean" ||
+    typeof task.explicitlyAuthorized !== "boolean"
+  ) return undefined;
+  if (raw.status !== task.status) return undefined;
+  const sources = task.sources.filter(validateConversationArtifact);
+  if (sources.length !== task.sources.length) return undefined;
+  const parsed = parseTaskSpec(JSON.stringify(task.spec), sources.map((source) => source.id));
+  if (!parsed.ok) return undefined;
+  const choices = normalizeDisambiguationChoices(task.choices);
+  const selection = normalizePendingSelection(task.selection);
+  if (!choices || selection === null) return undefined;
+  const normalizedTask: PendingDisambiguationTask = {
+    schemaVersion: "1",
+    id: task.id,
+    projectId: task.projectId,
+    projectRevision: task.projectRevision,
+    createdAt: task.createdAt,
+    status: task.status as PendingDisambiguationTaskStatus,
+    spec: parsed.value,
+    sources,
+    taskSource: task.taskSource as PendingDisambiguationTask["taskSource"],
+    repaired: task.repaired,
+    explicitlyAuthorized: task.explicitlyAuthorized,
+    choices,
+    ...(selection ? { selection } : {}),
+  };
+  return { task: normalizedTask, status: raw.status as PendingDisambiguationTaskStatus };
 }
 
 function normalizeExecution(value: unknown): ChatExecution | undefined {
@@ -187,7 +290,7 @@ function normalizeExecution(value: unknown): ChatExecution | undefined {
   const raw = value as Record<string, unknown>;
   if (
     raw.schemaVersion !== "1" ||
-    !["answer", "confirmation-required", "patch-proposed", "blocked"].includes(String(raw.outcome)) ||
+    !["answer", "disambiguation-required", "confirmation-required", "patch-proposed", "blocked"].includes(String(raw.outcome)) ||
     !["llm", "locked", "runtime", "invalid", "resumed"].includes(String(raw.taskSource)) ||
     !Number.isSafeInteger(raw.targetCount) || Number(raw.targetCount) < 0 ||
     (raw.action !== undefined && !TASK_ACTIONS.has(String(raw.action))) ||
@@ -213,6 +316,8 @@ function normalizeMessage(value: unknown): ChatMessage | null {
   }
   const confirmation = normalizeConfirmation(raw.confirmation);
   if (confirmation) message.confirmation = confirmation;
+  const disambiguation = normalizeDisambiguation(raw.disambiguation);
+  if (disambiguation) message.disambiguation = disambiguation;
   const execution = normalizeExecution(raw.execution);
   if (execution) message.execution = execution;
   return withConversationArtifacts(message);
@@ -231,8 +336,13 @@ function normalizeChat(value: unknown): ChatMessage[] | null {
   const sourceById = new Map(conversationArtifacts(messages).map((artifact) => [artifact.id, artifact]));
   return messages.map((message) => {
     const confirmation = message.confirmation;
-    if (!confirmation || confirmation.status !== "awaiting-confirmation") return message;
-    const sourcesStillBound = confirmation.task.sources.every((source) => {
+    const sourceTask = confirmation?.status === "awaiting-confirmation"
+      ? confirmation.task
+      : message.disambiguation?.status === "awaiting-disambiguation"
+        ? message.disambiguation.task
+        : null;
+    if (!sourceTask) return message;
+    const sourcesStillBound = sourceTask.sources.every((source) => {
       const actual = sourceById.get(source.id);
       return actual !== undefined &&
         actual.messageId === source.messageId &&
@@ -244,6 +354,16 @@ function normalizeChat(value: unknown): ChatMessage[] | null {
         actual.textHash === source.textHash;
     });
     if (sourcesStillBound) return message;
+    if (message.disambiguation?.status === "awaiting-disambiguation") {
+      return {
+        ...message,
+        disambiguation: {
+          status: "expired",
+          task: { ...message.disambiguation.task, status: "expired" },
+        },
+      };
+    }
+    if (!confirmation) return message;
     return {
       ...message,
       confirmation: {

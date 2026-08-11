@@ -12,7 +12,9 @@ import { resolveTaskContext, type ResolvedTask } from "./context/resolver";
 import { buildManuscriptModel } from "./manuscript/model";
 import { interpretTaskSpec, lockedTaskAction } from "./task/interpreter";
 import {
+  buildPendingDisambiguationTask,
   buildPendingFileTask,
+  interpretedFromDisambiguationChoice,
   interpretedFromPending,
 } from "./task/confirmation";
 import { artifactTextHash, conversationArtifacts } from "./conversationArtifacts";
@@ -34,6 +36,7 @@ import type {
   ChatExecution,
   ChatMessage,
   ChatSuggestion,
+  PendingDisambiguationTask,
   PendingFileTask,
 } from "../types/chat";
 
@@ -55,6 +58,8 @@ export type RuntimeRequest = {
   signal?: AbortSignal;
   /** Trusted confirmation state; when present the interpreter is not called again. */
   resumeTask?: PendingFileTask;
+  /** Trusted target choice state; when present the interpreter is not called again. */
+  resumeDisambiguation?: { task: PendingDisambiguationTask; choiceId: string };
 };
 
 export type RuntimeResult = {
@@ -64,6 +69,7 @@ export type RuntimeResult = {
   toolNotes: string[];
   outcome: AssistantOutcomeKind;
   execution: ChatExecution;
+  disambiguation?: PendingDisambiguationTask;
   confirmation?: PendingFileTask;
   lastCompileLog?: string;
   pdfBase64?: string;
@@ -179,6 +185,13 @@ function confirmationText(task: PendingFileTask): string {
   return `检测到文件修改请求，将处理：${targets || "当前选区"}。${preview ? `\n\n内容预览：${preview}` : ""}\n\n请确认是否继续生成 Diff/Keep；此时尚未修改项目文件。`;
 }
 
+function disambiguationText(task: PendingDisambiguationTask): string {
+  const choices = task.choices
+    .map((choice, index) => `${index + 1}. ${choice.slot} · ${choice.path}${choice.preview ? `\n   ${choice.preview}` : ""}`)
+    .join("\n");
+  return `Multiple possible manuscript targets were found. Choose the exact target before MedPrism prepares Diff/Keep.\n\n${choices}`;
+}
+
 export async function runAssistant(
   req: RuntimeRequest,
   dependencies: Partial<AssistantRuntimeDependencies> = {},
@@ -195,8 +208,11 @@ export async function runAssistant(
   const explicitAction = explicitWorkflow ? actionForWorkflow(explicitWorkflow) : undefined;
   const lockedAction = lockedTaskAction({ userText: req.userText, ...(explicitAction ? { explicitAction } : {}) });
   const resumed = req.resumeTask;
+  const resumedDisambiguation = req.resumeDisambiguation;
   const interpreted = resumed
     ? interpretedFromPending(resumed)
+    : resumedDisambiguation
+      ? interpretedFromDisambiguationChoice(resumedDisambiguation.task, resumedDisambiguation.choiceId)
     : await interpret({
         config: req.config,
         userText: req.userText,
@@ -216,7 +232,11 @@ export async function runAssistant(
   if (resumed && resumed.projectId !== snapshot.projectId) {
     return blockedResult({ message: "待确认任务属于另一个项目。", source: "resumed", action: interpreted.spec.action, failureCode: "PROJECT_MISMATCH" });
   }
-  if (resumed?.selection) {
+  if (resumedDisambiguation && resumedDisambiguation.task.projectId !== snapshot.projectId) {
+    return blockedResult({ message: "Pending target choice belongs to another project.", source: "resumed", action: interpreted.spec.action, failureCode: "PROJECT_MISMATCH" });
+  }
+  const resumedSelection = resumed?.selection ?? resumedDisambiguation?.task.selection;
+  if (resumedSelection) {
     const current = snapshot.selection && snapshot.selectedText !== undefined
       ? {
           path: snapshot.activeFile,
@@ -227,10 +247,10 @@ export async function runAssistant(
       : null;
     if (
       !current ||
-      current.path !== resumed.selection.path ||
-      current.start !== resumed.selection.start ||
-      current.end !== resumed.selection.end ||
-      current.textHash !== resumed.selection.textHash
+      current.path !== resumedSelection.path ||
+      current.start !== resumedSelection.start ||
+      current.end !== resumedSelection.end ||
+      current.textHash !== resumedSelection.textHash
     ) {
       return blockedResult({ message: "编辑器选区已变化，请重新发起修改。", source: "resumed", action: interpreted.spec.action, failureCode: "SELECTION_STALE" });
     }
@@ -239,14 +259,42 @@ export async function runAssistant(
   if (resolved.errors.length > 0) {
     return blockedResult({
       message: resolved.errors.join(" "),
-      source: resumed ? "resumed" : interpreted.source,
+      source: resumed || resumedDisambiguation ? "resumed" : interpreted.source,
       action: interpreted.spec.action,
       targetCount: resolved.targets.length,
       failureCode: "CONTEXT_UNRESOLVED",
       notes: resolved.toolNotes,
     });
   }
-  const bypassConfirmation = Boolean(resumed || lockedAction);
+  if (resolved.ambiguities.length > 0) {
+    const disambiguation = buildPendingDisambiguationTask(resolved, {
+      taskSource: interpreted.source,
+      repaired: interpreted.repaired,
+      explicitlyAuthorized: Boolean(lockedAction || resumedDisambiguation?.task.explicitlyAuthorized),
+    });
+    const execution: ChatExecution = {
+      schemaVersion: "1",
+      outcome: "disambiguation-required",
+      taskSource: interpreted.source,
+      action: resolved.spec.action,
+      targetCount: disambiguation.choices.length,
+    };
+    return {
+      agent: {
+        schemaVersion: "1",
+        workflow: workflowForAction(resolved.spec.action),
+        summary: "Waiting for target selection",
+        warnings: resolved.warnings,
+      },
+      content: disambiguationText(disambiguation),
+      suggestions: [],
+      toolNotes: [...resolved.toolNotes, "outcome:disambiguation-required"],
+      outcome: "disambiguation-required",
+      execution,
+      disambiguation,
+    };
+  }
+  const bypassConfirmation = Boolean(resumed || lockedAction || resumedDisambiguation?.task.explicitlyAuthorized);
   if (resolved.spec.applyMode === "propose-patch" && !bypassConfirmation) {
     const confirmation = buildPendingFileTask(resolved);
     const execution: ChatExecution = {
@@ -290,7 +338,7 @@ export async function runAssistant(
   if (resolved.spec.applyMode === "propose-patch" && !result.agent.patch) {
     return blockedResult({
       message: result.agent.warnings.join(" ") || result.content || "修改工作流没有生成可验证的 PatchSet。",
-      source: resumed ? "resumed" : interpreted.source,
+      source: resumed || resumedDisambiguation ? "resumed" : interpreted.source,
       action: resolved.spec.action,
       targetCount: resolved.targets.length,
       failureCode: "PATCH_NOT_PRODUCED",
@@ -311,7 +359,7 @@ export async function runAssistant(
   const execution: ChatExecution = {
     schemaVersion: "1",
     outcome,
-    taskSource: resumed ? "resumed" : interpreted.source,
+    taskSource: resumed || resumedDisambiguation ? "resumed" : interpreted.source,
     action: resolved.spec.action,
     targetCount: resolved.targets.length,
   };

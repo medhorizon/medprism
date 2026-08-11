@@ -97,7 +97,7 @@ describe("runtime-owned semantic writing", () => {
     }
   });
 
-  it("refuses to guess a canonical target when Data availability is duplicated", async () => {
+  it("requires target selection when Data availability is duplicated", async () => {
     const duplicated = springer.replace(
       "\\bibliography{refs}",
       "\\section*{Data availability}\nA second statement.\n\\bibliography{refs}",
@@ -123,7 +123,9 @@ describe("runtime-owned semantic writing", () => {
         repaired: false,
       },
     });
-    expect(resolved.errors.join(" ")).toContain("multiple active occurrences");
+    expect(resolved.errors).toEqual([]);
+    expect(resolved.ambiguities).toHaveLength(1);
+    expect(resolved.ambiguities[0]?.choices).toHaveLength(2);
     const result = await runSemanticWriting(snapshot, resolved);
     expect(result?.agent.patch).toBeUndefined();
   });

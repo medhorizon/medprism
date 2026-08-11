@@ -32,6 +32,95 @@ function preferredMainFile(snapshot: ContextSnapshot): string {
   return Object.keys(snapshot.files).find((path) => path.toLowerCase().endsWith(".tex")) ?? snapshot.activeFile;
 }
 
+function dirname(path: string): string {
+  const normalized = path.replace(/\\/g, "/");
+  const index = normalized.lastIndexOf("/");
+  return index < 0 ? "" : normalized.slice(0, index);
+}
+
+function normalizeProjectPath(path: string): string | null {
+  const parts: string[] = [];
+  for (const part of path.replace(/\\/g, "/").split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") {
+      if (!parts.length) return null;
+      parts.pop();
+      continue;
+    }
+    parts.push(part);
+  }
+  return parts.join("/");
+}
+
+function resolveTexInclude(
+  fromPath: string,
+  rawTarget: string,
+  files: Readonly<Record<string, string>>,
+): string | null {
+  const target = rawTarget.trim();
+  if (!target || /^[a-z][a-z0-9+.-]*:/i.test(target)) return null;
+  const base = dirname(fromPath);
+  const hasExtension = /\.[A-Za-z0-9]+$/.test(target);
+  const candidates = [
+    base ? `${base}/${target}` : target,
+    target,
+  ].flatMap((candidate) => hasExtension ? [candidate] : [`${candidate}.tex`, candidate]);
+
+  for (const candidate of candidates) {
+    const normalized = normalizeProjectPath(candidate);
+    if (normalized && normalized.toLowerCase().endsWith(".tex") && files[normalized] !== undefined) {
+      return normalized;
+    }
+  }
+  return null;
+}
+
+function includedTexPaths(
+  path: string,
+  source: string,
+  masked: string,
+  files: Readonly<Record<string, string>>,
+): string[] {
+  const paths = new Set<string>();
+  for (const command of ["input", "include", "subfile"]) {
+    for (const located of locateLatexCommands(source, masked, command)) {
+      const target = resolveTexInclude(path, source.slice(located.bodyStart, located.bodyEnd), files);
+      if (target) paths.add(target);
+    }
+  }
+  return [...paths];
+}
+
+function activeManuscriptPaths(
+  snapshot: ContextSnapshot,
+  mainFile: string,
+): { paths: string[]; diagnostics: ManuscriptDiagnostic[] } {
+  if (!mainFile.toLowerCase().endsWith(".tex") || snapshot.files[mainFile] === undefined) {
+    return {
+      paths: Object.keys(snapshot.files).filter((path) => path.toLowerCase().endsWith(".tex")),
+      diagnostics: [{
+        code: "MISSING_MAIN_FILE",
+        message: `Main manuscript file was not found: ${mainFile}.`,
+      }],
+    };
+  }
+
+  const seen = new Set<string>();
+  const queue = [mainFile];
+  for (let index = 0; index < queue.length; index += 1) {
+    const path = queue[index]!;
+    if (seen.has(path)) continue;
+    const source = snapshot.files[path];
+    if (source === undefined || !path.toLowerCase().endsWith(".tex")) continue;
+    seen.add(path);
+    const masked = structuralMask(source);
+    for (const include of includedTexPaths(path, source, masked, snapshot.files)) {
+      if (!seen.has(include)) queue.push(include);
+    }
+  }
+  return { paths: [...seen], diagnostics: [] };
+}
+
 function occurrenceId(path: string, ref: ManuscriptSlotRef, start: number): string {
   return `slot:${encodeURIComponent(path)}:${slotKey(ref)}:${start}`;
 }
@@ -264,10 +353,16 @@ function canonicalize(
 
 export function buildManuscriptModel(snapshot: ContextSnapshot): ManuscriptModel {
   const mainFile = preferredMainFile(snapshot);
-  const profile = detectTemplateProfile(snapshot.files);
+  const graph = activeManuscriptPaths(snapshot, mainFile);
+  const activeFiles = Object.fromEntries(
+    graph.paths.map((path) => [path, snapshot.files[path] ?? ""]),
+  );
+  const profile = detectTemplateProfile(activeFiles);
   const occurrences: ManuscriptOccurrence[] = [];
   const nodes: StructuralNode[] = [];
-  for (const [path, source] of Object.entries(snapshot.files)) {
+  for (const path of graph.paths) {
+    const source = snapshot.files[path];
+    if (source === undefined) continue;
     if (!path.toLowerCase().endsWith(".tex")) continue;
     const masked = structuralMask(source);
     pushCommandOccurrences(occurrences, path, source, masked, "title", { slot: "title" });
@@ -280,11 +375,15 @@ export function buildManuscriptModel(snapshot: ContextSnapshot): ManuscriptModel
     occurrences.push(...declarationOccurrences(path, source, masked));
     nodes.push(...structuralNodes(path, source, masked));
   }
-  const diagnostics = canonicalize(occurrences, profile, mainFile);
+  const diagnostics = [
+    ...graph.diagnostics,
+    ...canonicalize(occurrences, profile, mainFile),
+  ];
   return {
     projectRevision: snapshot.projectRevision,
     profile,
     mainFile,
+    activePaths: graph.paths,
     files: snapshot.files,
     occurrences,
     structuralNodes: nodes,

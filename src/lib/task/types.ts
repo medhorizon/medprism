@@ -47,6 +47,10 @@ export type InterpretedTask = {
       spec: TaskSpec;
       source: "llm" | "locked" | "runtime";
       repaired: boolean;
+      targetSelections?: Array<{
+        targetIndex: number;
+        occurrenceId: string;
+      }>;
     }
   | {
       ok: false;

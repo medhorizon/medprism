@@ -18,9 +18,17 @@ import type { SuccessfulInterpretedTask, TaskSpec } from "../task/types";
 export type ResolvedTargetBinding = {
   id: string;
   ref: ManuscriptSlotRef;
+  targetIndex?: number;
+  lockedToOccurrence?: boolean;
   occurrence?: ManuscriptOccurrence;
   insertion?: ManuscriptInsertion;
   providedText: string;
+};
+
+export type ResolvedTargetAmbiguity = {
+  targetIndex: number;
+  ref: ManuscriptSlotRef;
+  choices: ManuscriptOccurrence[];
 };
 
 export type ResolvedSelection = {
@@ -35,6 +43,7 @@ export type ResolvedTask = {
   model: ManuscriptModel;
   sourceArtifacts: SuccessfulInterpretedTask["sources"];
   targets: ResolvedTargetBinding[];
+  ambiguities: ResolvedTargetAmbiguity[];
   selection?: ResolvedSelection;
   contextBlocks: Array<{ id: string; path: string; text: string }>;
   warnings: string[];
@@ -104,6 +113,7 @@ export function resolveTaskContext(args: {
   const warnings: string[] = [];
   const errors: string[] = [];
   const bindings: ResolvedTargetBinding[] = [];
+  const ambiguities: ResolvedTargetAmbiguity[] = [];
   const contextBlocks: ResolvedTask["contextBlocks"] = [];
   let selection: ResolvedSelection | undefined;
 
@@ -124,14 +134,27 @@ export function resolveTaskContext(args: {
     });
   }
 
-  for (const target of interpreted.spec.targets) {
+  const selectionByTarget = new Map(
+    interpreted.targetSelections?.map((selection) => [selection.targetIndex, selection.occurrenceId]) ?? [],
+  );
+
+  for (const [targetIndex, target] of interpreted.spec.targets.entries()) {
     const ref = targetRef(target);
     const occurrences = occurrencesForSlot(model, ref);
-    if (occurrences.length > 1) {
-      errors.push(`Semantic slot ${slotKey(ref)} has multiple active occurrences.`);
+    const selectedOccurrenceId = selectionByTarget.get(targetIndex);
+    let occurrence: ManuscriptOccurrence | undefined;
+    if (selectedOccurrenceId) {
+      occurrence = occurrences.find((candidate) => candidate.id === selectedOccurrenceId);
+      if (!occurrence) {
+        errors.push(`Selected target for ${slotKey(ref)} is no longer available.`);
+        continue;
+      }
+    } else if (occurrences.length > 1) {
+      ambiguities.push({ targetIndex, ref, choices: occurrences });
       continue;
+    } else {
+      occurrence = canonicalOccurrence(model, ref);
     }
-    const occurrence = canonicalOccurrence(model, ref);
     const sourceIds = new Set(target.sourceIds);
     const selectedSources = interpreted.sources.filter((source) => sourceIds.has(source.id));
     const invalidSource = selectedSources.find((source) => !validateConversationArtifact(source));
@@ -150,6 +173,8 @@ export function resolveTaskContext(args: {
       const binding: ResolvedTargetBinding = {
         id: `binding:${occurrence.id}`,
         ref,
+        targetIndex,
+        ...(selectedOccurrenceId ? { lockedToOccurrence: true } : {}),
         occurrence,
         providedText,
       };
@@ -167,6 +192,7 @@ export function resolveTaskContext(args: {
       bindings.push({
         id: `binding:new:${slotKey(ref)}`,
         ref,
+        targetIndex,
         insertion,
         providedText,
       });
@@ -211,6 +237,7 @@ export function resolveTaskContext(args: {
     interpreted.spec.action !== "compile-fix" &&
     !selection &&
     bindings.length === 0 &&
+    ambiguities.length === 0 &&
     errors.length === 0
   ) {
     errors.push("No trusted selection or semantic target is available for this file transaction.");
@@ -222,6 +249,7 @@ export function resolveTaskContext(args: {
     model,
     sourceArtifacts: interpreted.sources,
     targets: bindings,
+    ambiguities,
     ...(selection ? { selection } : {}),
     contextBlocks,
     warnings,

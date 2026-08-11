@@ -58,6 +58,7 @@ async function buildOperations(
   mode: "scaffold" | "fill-sections",
 ): Promise<SemanticPatchBuild> {
   if (resolved.errors.length > 0) return { ok: false, message: resolved.errors.join(" ") };
+  if (resolved.ambiguities.length > 0) return { ok: false, message: "A semantic target must be selected before building a PatchSet." };
   const applied: string[] = [];
   const skipped: string[] = [];
   const operations: ReplaceTextOperation[] = [];

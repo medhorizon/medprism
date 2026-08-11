@@ -123,6 +123,39 @@ describe("natural conversation file transactions", () => {
     expect(result.execution).toMatchObject({ taskSource: "runtime", action: "polish" });
   });
 
+  it("turns assisted-writing intent into a confirmation card when TaskSpec chooses a file transaction", async () => {
+    const abstractSource = String.raw`\documentclass{article}
+\begin{document}
+\title{Old Title}
+\begin{abstract}
+Old abstract.
+\end{abstract}
+\section{Introduction}
+Text.
+\end{document}`;
+    const user = withConversationArtifacts({ id: "u-abstract", role: "user", content: "请帮我重写摘要，使其更适合投稿" });
+    const result = await runAssistant(request(user.content, [user], { "main.tex": abstractSource }), {
+      interpret: async () => ({
+        ok: true,
+        spec: {
+          schemaVersion: "2",
+          action: "draft",
+          applyMode: "propose-patch",
+          contentMode: "generate",
+          scope: "targets",
+          evidenceMode: "none",
+          targets: [{ slot: "abstract", sourceIds: [] }],
+        },
+        sources: user.artifacts!,
+        source: "llm",
+        repaired: false,
+      }),
+    });
+    expect(result.outcome).toBe("confirmation-required");
+    expect(result.confirmation?.targets[0]?.slot).toBe("Abstract");
+    expect(result.suggestions).toEqual([]);
+  });
+
   it("asks for confirmation, then creates a canonical title PatchSet without reinterpreting", async () => {
     const user = withConversationArtifacts({
       id: "u3",

@@ -13,7 +13,7 @@ import type {
 const ANSWER_ONLY_ACTIONS = new Set<TaskAction>(["advice", "review", "research"]);
 
 const COMMIT_SPEECH_RE =
-  /(?:修改|替换|更新|写入|插入|填入|采用|使用(?:上面|刚才|第)|用(?:上面|刚才|第|这个|那个)|定稿为|改为|改成|换成|设为|应用(?:这个|上述)|(?:写|撰写|起草|生成|补充|润色).{0,24}(?:摘要|引言|方法|结果|讨论|结论|声明|章节|正文|全文|文章|稿件)|change\s+.+\s+to|replace\s+.+\s+with|set\s+.+\s+to|insert\s+.+\s+into|apply\s+(?:this|the)|use\s+(?:the|this|that).+\b(?:title|text|version)|(?:write|draft|generate|polish)\s+.+\b(?:abstract|introduction|methods?|results?|discussion|conclusion|section|manuscript|paper)|write\s+.+\s+into)/i;
+  /(?:修改|替换|更新|写入|插入|填入|采用|使用(?:上面|刚才|第)|用(?:上面|刚才|第|这个|那个)|定稿为|改为|改成|换成|设为|应用(?:这个|上述)|change\s+.+\s+to|replace\s+.+\s+with|set\s+.+\s+to|insert\s+.+\s+into|apply\s+(?:this|the)|use\s+(?:the|this|that).+\b(?:title|text|version)|write\s+.+\s+into)/i;
 
 const EXPLORATORY_SPEECH_RE =
   /(?:如何|怎么|怎样|有什么建议|只(?:检查|分析|审阅|给建议)|检查但不修改|不(?:要|需|需要|用)(?:修改|改动|写入)|给.*(?:几个|一些).*(?:候选|备选)|帮我.*(?:取|想|拟).*(?:标题|题目)|(?:英文|中文)?改写(?:一下)?(?:这个|以下|上述)?(?:标题|题目)|翻译(?:一下)?(?:这个|以下|上述)?(?:标题|题目)|是否应该|可以吗|without\s+(?:modifying|changing|editing)|do\s+not\s+(?:modify|change|edit)|no\s+(?:file\s+)?changes?|how\s+(?:should|can|do)|what\s+(?:would|should)|suggest|propose\s+(?:some|a few)|ideas?\s+for|rewrite\s+(?:this|the)\s+title|translate\s+(?:this|the)\s+title)/i;
@@ -22,6 +22,8 @@ const EXPLICIT_ASSIGNMENT_RE =
   /(?:修改|替换|更新|改写|定稿|设置).{0,32}?(?:为|成)\s*\S|(?:change|replace|rewrite|set|update)\s+.+?\s+(?:to|with|as)\s+\S/i;
 const HISTORY_REFERENCE_RE =
   /(?:刚才|上面|上述|前面|第\s*[一二三四五六七八九十\d]+\s*个?|previous|above|earlier|the\s+(?:first|second|third|fourth|fifth))/i;
+const WRITING_ASSIST_RE =
+  /(?:协助写作|辅助写作|论文写作|科研写作|学术写作|SCI\s*写作|(?:帮我|请|please).{0,24}(?:写|撰写|起草|生成|补充|扩写|续写|完善|润色|改写|重写|翻译|整合|优化|学术化)|(?:写|撰写|起草|生成|补充|扩写|续写|完善|润色|改写|重写|翻译|整合|优化|学术化).{0,40}(?:标题|题目|摘要|引言|方法|结果|讨论|结论|关键词|声明|章节|正文|全文|文章|稿件|论文)|(?:write|draft|generate|compose|expand|continue|complete|polish|rewrite|rephrase|translate|improve|optimise|optimize).{0,80}\b(?:title|abstract|introduction|methods?|results?|discussion|conclusion|keywords?|statement|section|manuscript|paper)\b|\b(?:academic|scientific)\s+writing\b)/i;
 
 const SLOT_PATTERNS: ReadonlyArray<[ManuscriptSlotKind, RegExp]> = [
   ["title", /标题|题目|\btitle\b/i],
@@ -42,7 +44,8 @@ const SLOT_PATTERNS: ReadonlyArray<[ManuscriptSlotKind, RegExp]> = [
 
 export type RuntimeTaskPolicy = {
   applyMode: TaskApplyMode;
-  reason: "locked-action" | "explicit-file-intent" | "explicit-answer-intent" | "safe-default";
+  reason: "locked-action" | "explicit-file-intent" | "explicit-answer-intent" | "writing-assist-llm" | "safe-default";
+  allowLlmApplyMode: boolean;
 };
 
 export function isAnswerOnlyAction(action: TaskAction): boolean {
@@ -57,9 +60,15 @@ export function requestsExploration(text: string): boolean {
   return EXPLORATORY_SPEECH_RE.test(text) && !EXPLICIT_ASSIGNMENT_RE.test(text);
 }
 
+export function requestsWritingAssistance(text: string): boolean {
+  return WRITING_ASSIST_RE.test(text) && !requestsExploration(text) && !requestsFileCommit(text);
+}
+
 /**
- * File permission is runtime-owned. The model classifies the writing operation,
- * but it cannot upgrade an answer into a project transaction.
+ * File permission is runtime-owned. Clear UI/slash actions and explicit commit
+ * speech acts are still authoritative. Ambiguous assisted-writing requests are
+ * sent to the TaskSpec interpreter so the model can classify conversation vs a
+ * semantic file transaction, while runtime still owns ranges and PatchSets.
  */
 export function runtimeTaskPolicy(args: {
   userText: string;
@@ -69,15 +78,19 @@ export function runtimeTaskPolicy(args: {
     return {
       applyMode: isAnswerOnlyAction(args.lockedAction) ? "answer-only" : "propose-patch",
       reason: "locked-action",
+      allowLlmApplyMode: false,
     };
   }
   if (requestsExploration(args.userText)) {
-    return { applyMode: "answer-only", reason: "explicit-answer-intent" };
+    return { applyMode: "answer-only", reason: "explicit-answer-intent", allowLlmApplyMode: false };
   }
   if (requestsFileCommit(args.userText)) {
-    return { applyMode: "propose-patch", reason: "explicit-file-intent" };
+    return { applyMode: "propose-patch", reason: "explicit-file-intent", allowLlmApplyMode: false };
   }
-  return { applyMode: "answer-only", reason: "safe-default" };
+  if (requestsWritingAssistance(args.userText)) {
+    return { applyMode: "answer-only", reason: "writing-assist-llm", allowLlmApplyMode: true };
+  }
+  return { applyMode: "answer-only", reason: "safe-default", allowLlmApplyMode: false };
 }
 
 function namedSlot(text: string): ManuscriptSlotKind | undefined {

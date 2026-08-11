@@ -3,7 +3,7 @@ import { buildContextSnapshot } from "../context/snapshot";
 import { buildConversationArtifacts } from "../conversationArtifacts";
 import { buildManuscriptModel } from "../manuscript/model";
 import type { completeStructured } from "../llmClient";
-import { interpretTaskSpec, requestsFileCommit } from "./interpreter";
+import { interpretTaskSpec, requestsFileCommit, requestsWritingAssistance } from "./interpreter";
 
 async function model() {
   const snapshot = await buildContextSnapshot({
@@ -20,7 +20,8 @@ describe("TaskSpec v2 interpreter", () => {
     expect(requestsFileCommit("英文改写标题：《旧标题》")).toBe(false);
     expect(requestsFileCommit("如何修改这个标题？")).toBe(false);
     expect(requestsFileCommit("检查全文但不要修改项目文件")).toBe(false);
-    expect(requestsFileCommit("帮我写一段摘要")).toBe(true);
+    expect(requestsFileCommit("帮我写一段摘要")).toBe(false);
+    expect(requestsWritingAssistance("帮我写一段摘要")).toBe(true);
     expect(requestsFileCommit("修改标题为A New Title")).toBe(true);
     expect(requestsFileCommit("改写标题为A New Title")).toBe(true);
     expect(requestsFileCommit("采用第 3 个标题")).toBe(true);
@@ -60,6 +61,63 @@ describe("TaskSpec v2 interpreter", () => {
     });
     expect(interpreted.ok).toBe(true);
     if (interpreted.ok) expect(interpreted.spec.targets[0]?.sourceIds).toEqual([third.id]);
+  });
+
+  it("lets the assisted-writing TaskSpec policy decide conversation versus file transaction", async () => {
+    const userText = "请帮我写一段摘要";
+    const sources = buildConversationArtifacts({ messageId: "u1", role: "user", content: userText });
+    let structuredCalled = false;
+    const interpreted = await interpretTaskSpec({
+      config: { mode: "mock" },
+      userText,
+      history: [],
+      model: await model(),
+      sources,
+      complete: async <T>(args: Parameters<typeof completeStructured<T>>[0]) => {
+        structuredCalled = true;
+        const payload = JSON.parse(args.messages.at(-1)?.content ?? "{}");
+        expect(payload.authoritativeApplyMode).toBeNull();
+        expect(payload.allowedApplyModes).toEqual(["answer-only", "propose-patch"]);
+        expect(args.messages[0]?.content).toContain("Assisted writing TaskSpec policy");
+        const raw = JSON.stringify({
+          schemaVersion: "2",
+          action: "draft",
+          applyMode: "propose-patch",
+          contentMode: "generate",
+          scope: "targets",
+          evidenceMode: "none",
+          targets: [{ slot: "abstract", sourceIds: [] }],
+        });
+        const parsed = args.parse(raw);
+        if (!parsed.ok) return { ok: false as const, message: parsed.message, raw };
+        return { ok: true as const, value: parsed.value as T, raw, repaired: false };
+      },
+    });
+    expect(structuredCalled).toBe(true);
+    expect(interpreted).toMatchObject({
+      ok: true,
+      source: "llm",
+      spec: {
+        action: "draft",
+        applyMode: "propose-patch",
+        contentMode: "generate",
+        targets: [{ slot: "abstract", sourceIds: [] }],
+      },
+    });
+  });
+
+  it("blocks assisted-writing classification failures instead of silently turning them into chat", async () => {
+    const userText = "请帮我补充讨论部分";
+    const sources = buildConversationArtifacts({ messageId: "u1", role: "user", content: userText });
+    const interpreted = await interpretTaskSpec({
+      config: { mode: "mock" },
+      userText,
+      history: [],
+      model: await model(),
+      sources,
+      complete: async () => ({ ok: false, message: "invalid after repair", raw: "plain text" }),
+    });
+    expect(interpreted).toMatchObject({ ok: false, source: "invalid", error: "invalid after repair" });
   });
 
   it("keeps an unresolvable mutation blocked after malformed structured output", async () => {

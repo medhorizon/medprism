@@ -1,4 +1,5 @@
 import { LLM_CLASSIFIER_HISTORY_MAX } from "../chatHistory";
+import assistedWritingPolicy from "../../../prompts/task/assisted-writing.md?raw";
 import {
   completeStructured,
   type ChatRequestMessage,
@@ -41,7 +42,9 @@ Actions:
 - review/research: advisory only
 - latex/compile-fix: structural or diagnostic source repair
 
-The runtime supplies authoritativeApplyMode. Echo it exactly; the model does not grant file permission.
+The runtime may supply authoritativeApplyMode. When it is "answer-only" or "propose-patch", echo it exactly.
+When authoritativeApplyMode is null, decide applyMode from the assisted-writing policy below.
+The model never grants physical file permission: it only classifies intent, selects semantic slots, and cites runtime source IDs.
 
 Required invariants:
 - advice/review/research => applyMode answer-only
@@ -58,15 +61,18 @@ Use fill-sections when the user supplies the exact replacement text, including c
 Use draft only when new prose must be generated. Brainstorming, comparison, questions, and requests for candidate titles are advice until the user explicitly asks to apply one.
 Targets use sourceIds copied from the supplied runtime artifact catalog. A source may come from the current user message or a prior assistant candidate. Never repeat source text in JSON.
 
+${assistedWritingPolicy}
+
 Examples:
 - "give me title ideas" => advice + answer-only + manuscript + []
 - "rewrite this title in English" => polish + answer-only + manuscript + []
 - "change the title to X" => fill-sections + propose-patch + targets + title sourceIds
+- "please help draft the abstract" => draft + propose-patch + targets + abstract + []
 - locked polish with no selection => polish + propose-patch + manuscript + []
 
 Return JSON only.`;
 
-export { requestsExploration, requestsFileCommit } from "./policy";
+export { requestsExploration, requestsFileCommit, requestsWritingAssistance } from "./policy";
 
 function slashAction(text: string): TaskAction | undefined {
   const command = text.trim().match(/^\/(ask|advice|write|draft|polish|cite|review|research|latex|compile-fix)\b/i)?.[1]?.toLowerCase();
@@ -103,7 +109,7 @@ export async function interpretTaskSpec(args: {
     userText: args.userText,
     ...(args.lockedAction ? { lockedAction: args.lockedAction } : {}),
   });
-  if (policy.applyMode === "answer-only") {
+  if (policy.applyMode === "answer-only" && !policy.allowLlmApplyMode) {
     // Pure conversation must not depend on provider-specific JSON compliance.
     // The downstream answer workflow still receives manuscript context and may stream normally.
     const conversationalTask = runtimeFallbackTask({
@@ -123,7 +129,8 @@ export async function interpretTaskSpec(args: {
       role: "user",
       content: JSON.stringify({
         lockedAction: args.lockedAction ?? null,
-        authoritativeApplyMode: policy.applyMode,
+        authoritativeApplyMode: policy.allowLlmApplyMode ? null : policy.applyMode,
+        allowedApplyModes: policy.allowLlmApplyMode ? ["answer-only", "propose-patch"] : [policy.applyMode],
         permissionReason: policy.reason,
         currentUserText: args.userText,
         uiSelectionAvailable: args.selectionAvailable === true,
@@ -144,19 +151,30 @@ export async function interpretTaskSpec(args: {
       messages,
       parse: (raw) => parseTaskSpec(raw, ids, {
         ...(args.lockedAction ? { lockedAction: args.lockedAction } : {}),
-        authoritativeApplyMode: policy.applyMode,
+        ...(policy.allowLlmApplyMode ? {} : { authoritativeApplyMode: policy.applyMode }),
         selectionAvailable: args.selectionAvailable === true,
       }),
       repairInstruction: [
         "Return only a valid TaskSpec schemaVersion 2 JSON object.",
         `action is${args.lockedAction ? ` locked to ${args.lockedAction}` : " selected from the documented enum"}.`,
-        `applyMode must be ${policy.applyMode}.`,
+        policy.allowLlmApplyMode
+          ? "applyMode must be either answer-only or propose-patch according to the assisted-writing policy."
+          : `applyMode must be ${policy.applyMode}.`,
         `UI selection is ${args.selectionAvailable === true ? "available" : "not available"}.`,
         "Use only supplied source artifact IDs and never return physical file or PatchSet fields.",
       ].join(" "),
       ...(args.signal ? { signal: args.signal } : {}),
     });
   } catch (error) {
+    if (policy.allowLlmApplyMode) {
+      return {
+        ok: false,
+        sources,
+        source: "invalid",
+        repaired: true,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
     const fallback = runtimeFallbackTask({
       userText: args.userText,
       sources,
@@ -174,6 +192,15 @@ export async function interpretTaskSpec(args: {
     };
   }
   if (!result.ok) {
+    if (policy.allowLlmApplyMode) {
+      return {
+        ok: false,
+        sources,
+        source: "invalid",
+        repaired: true,
+        error: result.message,
+      };
+    }
     const fallback = runtimeFallbackTask({
       userText: args.userText,
       sources,

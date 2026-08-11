@@ -1,7 +1,7 @@
 {
   "name": "medprism",
   "private": true,
-  "version": "1.5.3",
+  "version": "1.5.4",
   "description": "Medical scientific writing workspace",
   "author": "MedHorizon",
   "type": "module",

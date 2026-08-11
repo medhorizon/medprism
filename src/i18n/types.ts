@@ -147,6 +147,7 @@ export type MessageKey =
   | "assistant.undoConflict"
   | "assistant.placeholder"
   | "assistant.send"
+  | "assistant.stop"
   | "assistant.initial"
   | "assistant.q1"
   | "assistant.q1.prompt"

@@ -12,12 +12,13 @@ import {
   withPendingStatus,
   type ConfirmationControl,
 } from "../lib/task/confirmation";
-import { saveProjectChat } from "./projectArtifacts";
+import { finalizeChatMessages, saveProjectChat } from "./projectArtifacts";
 
 type SessionState = {
   messages: ChatMessage[];
   sending: boolean;
   runId: number;
+  controller?: AbortController;
 };
 
 type Listener = () => void;
@@ -111,9 +112,29 @@ export function clearSessionChat(projectId: string): void {
   emit();
 }
 
+/** Abort an in-flight assistant turn for one project and finalize the pending reply. */
+export function stopProjectAssistant(
+  projectId: string,
+  interruptedContent: string,
+): boolean {
+  if (!projectId.trim()) return false;
+  const session = sessions.get(projectId);
+  if (!session?.sending) return false;
+  session.controller?.abort();
+  session.controller = undefined;
+  session.runId += 1;
+  session.sending = false;
+  session.messages = finalizeChatMessages(session.messages, interruptedContent);
+  persistDurableChat(projectId, session.messages);
+  emit();
+  return true;
+}
+
 /** App is closing: stop runs and persist what we can (pending → interrupted via saveProjectChat). */
 export function shutdownProjectChats(interruptedContent: string): void {
   for (const [projectId, session] of sessions) {
+    session.controller?.abort();
+    session.controller = undefined;
     session.runId += 1;
     session.sending = false;
     saveProjectChat(projectId, session.messages, localStorage, interruptedContent);
@@ -249,6 +270,8 @@ export async function startProjectAssistant(
   }
   const thinkingId = crypto.randomUUID();
   const runId = ++session.runId;
+  const controller = new AbortController();
+  session.controller = controller;
   session.messages = [
     ...session.messages,
     userMessage,
@@ -274,6 +297,7 @@ export async function startProjectAssistant(
       conversation: session.messages.filter((message) => message.id !== thinkingId),
       workflow: request.workflow,
       ctx: request.ctx,
+      signal: controller.signal,
       ...(resumeTask ? { resumeTask } : {}),
       ...(resumeDisambiguation ? { resumeDisambiguation } : {}),
       onDelta: (delta) => {
@@ -368,6 +392,7 @@ export async function startProjectAssistant(
     const current = ensure(projectId);
     if (current.runId === runId) {
       current.sending = false;
+      if (current.controller === controller) current.controller = undefined;
       emit();
     }
   }

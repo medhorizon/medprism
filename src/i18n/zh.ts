@@ -147,6 +147,7 @@ export const zh: Messages = {
   "assistant.undoConflict": "保留后文件又被编辑，无法安全撤销",
   "assistant.placeholder": "随便问…",
   "assistant.send": "发送",
+  "assistant.stop": "停止",
   "assistant.initial":
     "已加载当前稿件。可让我润色段落、统一术语、检查引用与 LaTeX，或按目标期刊调整表述。",
   "assistant.q1": "润色文章",

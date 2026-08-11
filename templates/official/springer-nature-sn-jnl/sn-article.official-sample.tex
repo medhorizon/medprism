@@ -306,7 +306,9 @@ As per the \LaTeX\ standards you need to use eps images for \LaTeX\ compilation 
 
 \begin{figure}[h]
 \centering
-\includegraphics[width=0.9\textwidth]{fig.eps}
+\fbox{\parbox[c][0.28\textheight][c]{0.86\textwidth}{\centering Sample figure placeholder}}
+% [MedPrism] The official \includegraphics{fig.eps} demo is replaced with
+% a placeholder because Tectonic/XeTeX cannot include EPS directly.
 \caption{This is a widefig. This is an example of long caption this is an example of long caption  this is an example of long caption this is an example of long caption}\label{fig1}
 \end{figure}
 
@@ -339,31 +341,12 @@ Packages \verb+algorithm+, \verb+algorithmicx+ and \verb+algpseudocode+ are used
 
 You may refer above listed package documentations for more details before setting \verb+algorithm+ environment. For program codes, the ``verbatim'' package is required and the command to be used is \texttt{\string\begin\{verbatim\}} \verb+...+ \texttt{\string\end\{verbatim\}}. 
 
-Similarly, for \verb+listings+, use the \verb+listings+ package. \verb+% [MedPrism] Sample lstlisting omitted for Tectonic/XeTeX compatibility.
-\begin{equation}
-|\psi\rangle = \sum_i c_i |\phi_i\rangle
-\end{equation}+ is used to set environments similar to \verb+verbatim+ environment. Refer to the \verb+lstlisting+ package documentation for more details.
+Similarly, for \verb+listings+, use the \verb+listings+ package. The \texttt{lstlisting} environment is used to set code blocks similar to the \verb+verbatim+ environment. Refer to the \verb+lstlisting+ package documentation for more details.
 
-A fast exponentiation procedure:
-
-\lstset{texcl=true,basicstyle=\small\sf,commentstyle=\small\rm,mathescape=true,escapeinside={(*}{*)}}
-\begin{lstlisting}
-begin
-  for $i:=1$ to $10$ step $1$ do
-      expt($2,i$);  
-      newline() od                (*\textrm{Comments will be set flush to the right margin}*)
-where
-proc expt($x,n$) $\equiv$
-  $z:=1$;
-  do if $n=0$ then exit fi;
-     do if odd($n$) then exit fi;                 
-        comment: (*\textrm{This is a comment statement;}*)
-        $n:=n/2$; $x:=x*x$ od;
-     { $n>0$ };
-     $n:=n-1$; $z:=z*x$ od;
-  print($z$). 
-end
-\end{lstlisting}
+A fast exponentiation procedure is usually shown here.
+% [MedPrism] The official lstlisting demonstration is omitted so the
+% reference sample remains robust under Tectonic/XeTeX without fetching
+% additional listing fonts.
 
 \begin{algorithm}
 \caption{Calculate $y = x^n$}\label{algo1}
@@ -395,18 +378,8 @@ end
 %% \bigskip command. Please ignore this.       %%
 %%=============================================%%
 \bigskip
-\begin{minipage}{\hsize}%
-\lstset{frame=single,framexleftmargin=-1pt,framexrightmargin=-17pt,framesep=12pt,linewidth=0.98\textwidth,language=pascal}% Set your language (you can change the language for each code-block optionally)
-%%% Start your code-block
-\begin{lstlisting}
-for i:=maxint to 0 do
-begin
-{ do nothing }
-end;
-Write('Case insensitive ');
-Write('Pascal keywords.');
-\end{lstlisting}
-\end{minipage}
+% [MedPrism] The second official lstlisting demonstration is omitted for
+% the same Tectonic/XeTeX compatibility reason.
 
 \section{Cross referencing}\label{sec8}
 

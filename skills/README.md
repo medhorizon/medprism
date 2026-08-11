@@ -2,6 +2,16 @@
 
 Skills are focused model instructions. They are **not** business workflows and do not decide tool order, file writes, or validation.
 
+## Staged compatibility set
+
+`skills/staged/` contains an opt-in rewrite of the adapters with explicit
+semantic-target input rules, workflow-envelope examples, payload exclusivity,
+and product-style interaction guidance (selection -> concise result -> Diff ->
+Keep/Reject). It is documentation and prompt material only: no runtime import
+loads it yet. The current `skills/*` adapters remain the runtime source until
+the staged activation gates pass. See [`staged/README.md`](staged/README.md)
+and [`../docs/skill-compatibility-audit.md`](../docs/skill-compatibility-audit.md).
+
 ## Deterministic workflows
 
 | Workflow | Primary Skill per model call | Runtime-owned steps |
@@ -41,3 +51,4 @@ A combined request such as “润色并补引用” remains one deterministic ci
 |---|---|
 | Upstream source copies | `.agents/skills/*` |
 | MedPrism runtime adaptations | `skills/*` |
+| Staged, not enabled | `skills/staged/*` |

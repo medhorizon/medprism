@@ -1,0 +1,22 @@
+{
+  "schemaVersion": "1",
+  "status": "staged",
+  "enabled": false,
+  "sourceOfTruth": "skills/staged",
+  "activationRequires": [
+    "static contract lint",
+    "strict parser fixtures",
+    "end-to-end transaction fixtures",
+    "explicit runtime import change"
+  ],
+  "skills": [
+    "scientific-writing",
+    "academic-paper",
+    "nature-writing",
+    "nature-polishing",
+    "latex-paper-en",
+    "nature-citation",
+    "academic-paper-reviewer",
+    "fix-compile-errors"
+  ]
+}

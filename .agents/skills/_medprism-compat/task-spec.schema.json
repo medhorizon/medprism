@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://medprism.local/schemas/task-spec.schema.json",
+  "title": "MedPrism semantic TaskSpec",
+  "description": "Classifier-only contract. This is not a workflow reply and never contains physical edit metadata.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "action", "applyMode", "contentMode", "scope", "evidenceMode", "targets"],
+  "properties": {
+    "schemaVersion": { "const": "2" },
+    "action": {
+      "enum": ["advice", "draft", "polish", "scaffold", "fill-sections", "cite", "review", "research", "latex", "compile-fix"]
+    },
+    "applyMode": { "enum": ["answer-only", "propose-patch"] },
+    "contentMode": { "enum": ["none", "generate", "provided", "blank"] },
+    "scope": { "enum": ["selection", "targets", "active-file", "manuscript", "compile-log"] },
+    "evidenceMode": { "enum": ["none", "literature"] },
+    "targets": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/target" }
+    },
+    "contextSlots": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/contextSlot" }
+    }
+  },
+  "$defs": {
+    "slot": {
+      "enum": [
+        "title", "abstract", "keywords", "introduction", "methods", "results",
+        "discussion", "conclusion", "acknowledgements", "funding",
+        "author-contributions", "competing-interests", "ethics", "consent-publication",
+        "data-availability", "materials-availability", "code-availability",
+        "supplementary-information", "body", "custom-section"
+      ]
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["slot", "sourceIds"],
+      "properties": {
+        "slot": { "$ref": "#/$defs/slot" },
+        "title": { "type": "string", "minLength": 1 },
+        "sourceIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "slot": { "const": "custom-section" } } },
+          "then": { "required": ["title"] },
+          "else": { "not": { "required": ["title"] } }
+        }
+      ]
+    },
+    "contextSlot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["slot"],
+      "properties": {
+        "slot": { "$ref": "#/$defs/slot" },
+        "title": { "type": "string", "minLength": 1 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "slot": { "const": "custom-section" } } },
+          "then": { "required": ["title"] },
+          "else": { "not": { "required": ["title"] } }
+        }
+      ]
+    }
+  }
+}
+

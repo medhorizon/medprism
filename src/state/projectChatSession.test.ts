@@ -11,6 +11,7 @@ import {
   setSessionChat,
   shutdownProjectChats,
   startProjectAssistant,
+  stopProjectAssistant,
 } from "./projectChatSession";
 
 const storage = new Map<string, string>();
@@ -109,6 +110,12 @@ function answerResult(content = "done") {
 }
 
 vi.mock("./projectArtifacts", () => ({
+  finalizeChatMessages: (
+    messages: ChatMessage[],
+    interrupted = "Interrupted",
+  ) => messages.map((message) =>
+    message.pending ? { id: message.id, role: message.role, content: interrupted } : message,
+  ),
   saveProjectChat: (
     projectId: string,
     messages: ChatMessage[],
@@ -211,6 +218,44 @@ describe("projectChatSession", () => {
     shutdownProjectChats("Interrupted by shutdown");
     expect(storage.get("a")).toContain("Interrupted by shutdown");
     expect(storage.get("a")).not.toContain('"pending":true');
+  });
+
+  it("stops an in-flight assistant turn and finalizes the pending reply", async () => {
+    let finish!: (value: Awaited<ReturnType<typeof runAssistant>>) => void;
+    const gate = new Promise<Awaited<ReturnType<typeof runAssistant>>>((resolve) => {
+      finish = resolve;
+    });
+    vi.mocked(runAssistant).mockImplementation(async (req) => {
+      expect(req.signal).toBeInstanceOf(AbortSignal);
+      return gate;
+    });
+    const pending = startProjectAssistant({
+      projectId: "a",
+      config: { mode: "mock" },
+      displayUserText: "hello",
+      userText: "hello",
+      history: [],
+      workflow: "advice",
+      ctx: { projectId: "a", files: { "main.tex": "text" } },
+      thinkingLabel: "Thinking",
+      mapError: String,
+    });
+    await Promise.resolve();
+    expect(isSessionSending("a")).toBe(true);
+    expect(stopProjectAssistant("a", "Stopped by user")).toBe(true);
+    expect(isSessionSending("a")).toBe(false);
+    expect(getSessionChat("a").at(-1)).toMatchObject({ content: "Stopped by user" });
+    expect(getSessionChat("a").at(-1)?.pending).toBeUndefined();
+    finish({
+      agent: { schemaVersion: "1", workflow: "advice", summary: "late", warnings: [] },
+      content: "should be ignored",
+      suggestions: [],
+      toolNotes: [],
+      outcome: "answer",
+      execution: { schemaVersion: "1", outcome: "answer", taskSource: "runtime", targetCount: 0 },
+    });
+    expect(await pending).toBe(false);
+    expect(getSessionChat("a").at(-1)?.content).toBe("Stopped by user");
   });
 
   it("cancels a pending file task without calling the model", async () => {

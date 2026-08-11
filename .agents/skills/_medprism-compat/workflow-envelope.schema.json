@@ -1,0 +1,213 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://medprism.local/schemas/workflow-envelope.schema.json",
+  "title": "MedPrism model workflow envelope",
+  "description": "Model-owned output for codex/conversation-file-transactions. Runtime metadata and file application are intentionally excluded.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "workflow", "summary", "warnings"],
+  "properties": {
+    "schemaVersion": { "const": "1" },
+    "workflow": {
+      "enum": ["research", "writing", "polish", "citation", "latex", "compile-fix", "review", "advice"]
+    },
+    "summary": { "type": "string", "minLength": 1 },
+    "warnings": { "type": "array", "items": { "type": "string" } },
+    "content": { "type": "string" },
+    "patchProposal": { "$ref": "#/$defs/modelPatchProposal" },
+    "textDraft": { "$ref": "#/$defs/textDraft" },
+    "researchUse": { "$ref": "#/$defs/researchUse" },
+    "citationPlan": { "$ref": "#/$defs/citationPlan" },
+    "review": { "$ref": "#/$defs/review" }
+  },
+  "oneOf": [
+    {
+      "not": {
+        "anyOf": [
+          { "required": ["patchProposal"] },
+          { "required": ["textDraft"] },
+          { "required": ["citationPlan"] },
+          { "required": ["review"] },
+          { "required": ["researchUse"] }
+        ]
+      }
+    },
+    {
+      "required": ["patchProposal"],
+      "not": {
+        "anyOf": [
+          { "required": ["textDraft"] },
+          { "required": ["citationPlan"] },
+          { "required": ["review"] }
+        ]
+      }
+    },
+    {
+      "required": ["textDraft"],
+      "not": {
+        "anyOf": [
+          { "required": ["patchProposal"] },
+          { "required": ["researchUse"] },
+          { "required": ["citationPlan"] },
+          { "required": ["review"] }
+        ]
+      }
+    },
+    {
+      "required": ["citationPlan"],
+      "not": {
+        "anyOf": [
+          { "required": ["patchProposal"] },
+          { "required": ["textDraft"] },
+          { "required": ["researchUse"] },
+          { "required": ["review"] }
+        ]
+      }
+    },
+    {
+      "required": ["review"],
+      "not": {
+        "anyOf": [
+          { "required": ["patchProposal"] },
+          { "required": ["textDraft"] },
+          { "required": ["researchUse"] },
+          { "required": ["citationPlan"] }
+        ]
+      }
+    }
+  ],
+  "$defs": {
+    "modelPatchProposal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "summary", "operations"],
+      "properties": {
+        "schemaVersion": { "const": "1" },
+        "summary": { "type": "string", "minLength": 1 },
+        "operations": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "oneOf": [
+              { "$ref": "#/$defs/replaceTextProposal" },
+              { "$ref": "#/$defs/insertProposal" }
+            ]
+          }
+        }
+      }
+    },
+    "replaceTextProposal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op", "oldText", "newText"],
+      "properties": {
+        "op": { "const": "replace_text" },
+        "path": { "type": "string", "minLength": 1 },
+        "oldText": { "type": "string", "minLength": 1, "maxLength": 250000 },
+        "newText": { "type": "string", "maxLength": 250000 }
+      }
+    },
+    "insertProposal": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op", "text"],
+      "properties": {
+        "op": { "enum": ["insert_before", "insert_after"] },
+        "path": { "type": "string", "minLength": 1 },
+        "anchor": { "type": "string", "maxLength": 250000 },
+        "targetKind": {
+          "enum": [
+            "selection", "abstract", "title", "keywords", "introduction",
+            "methods", "results", "discussion", "conclusion", "funding",
+            "acknowledgements", "author-contributions", "data-availability",
+            "ethics", "conflict-of-interest", "body", "section"
+          ]
+        },
+        "text": { "type": "string", "maxLength": 250000 }
+      }
+    },
+    "textDraft": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text", "format", "sourceCandidateIds"],
+      "properties": {
+        "text": { "type": "string", "minLength": 1, "maxLength": 80000, "pattern": "^(?![\\s\\S]*```)[\\s\\S]*$" },
+        "format": { "enum": ["plain-text", "latex-body"] },
+        "sourceCandidateIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "researchUse": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["sourceCandidateIds"],
+      "properties": {
+        "sourceCandidateIds": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "citationPlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidates"],
+      "properties": {
+        "candidates": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/citationJudgement" }
+        }
+      }
+    },
+    "citationJudgement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["candidateId", "relation", "selected"],
+      "properties": {
+        "candidateId": { "type": "string", "minLength": 1 },
+        "relation": { "enum": ["supports", "contradicts", "related", "topic_match_only"] },
+        "selected": { "type": "boolean" },
+        "reason": { "type": "string" }
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["findings"],
+      "properties": {
+        "limitations": { "type": "array", "items": { "type": "string" } },
+        "findings": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/reviewFinding" }
+        }
+      }
+    },
+    "reviewFinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["severity", "category", "issue", "whyItMatters", "recommendation", "canApplyAsEdit"],
+      "properties": {
+        "severity": { "enum": ["major", "moderate", "minor"] },
+        "category": { "enum": ["scientific", "statistics", "evidence", "consistency", "writing", "latex"] },
+        "location": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "path": { "type": "string", "minLength": 1 },
+            "text": { "type": "string", "minLength": 1 }
+          },
+          "anyOf": [{ "required": ["path"] }, { "required": ["text"] }]
+        },
+        "issue": { "type": "string", "minLength": 1 },
+        "whyItMatters": { "type": "string", "minLength": 1 },
+        "recommendation": { "type": "string", "minLength": 1 },
+        "canApplyAsEdit": { "type": "boolean" }
+      }
+    }
+  }
+}

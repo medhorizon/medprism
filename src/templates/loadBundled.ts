@@ -3,7 +3,7 @@ import { detectMainFile } from "./detectMain";
 import type { ExtractedOfficialTemplate } from "./types";
 
 const TEXT_FILE =
-  /\.(tex|bib|cls|bst|sty|txt|md|cfg|clo|def|fd|ins|dtx|bbx|cbx|lbx|dbx|html|xml|json|csv|bbl)$/i;
+  /\.(tex|bib|cls|bst|sty|txt|md|cfg|clo|def|fd|ins|dtx|bbx|cbx|lbx|dbx|html|xml|json|csv|bbl|eps)$/i;
 const TEXT_BASENAME = /^(readme|license|makefile|manifest\.txt|changelog\.txt|source\.txt)$/i;
 
 /**

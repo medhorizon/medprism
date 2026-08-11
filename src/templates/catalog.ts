@@ -13,7 +13,7 @@ export const OFFICIAL_TEMPLATE_CATALOG: OfficialTemplateSpec[] = [
     tags: ["official", "journal", "springer-nature", "bundled"],
     downloadPage:
       "https://www.springernature.com/gp/authors/campaigns/latex-author-support",
-    zipHint: "Bundled from Springer Nature author support package (Dec 2024).",
+    zipHint: "Bundled from Springer Nature Overleaf package v3.1 (Dec 2024).",
     mainCandidates: ["sn-article.tex"],
     licenseNote: "Vendored official package. Follow Springer Nature redistribution terms.",
   },

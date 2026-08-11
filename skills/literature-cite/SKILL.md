@@ -1,24 +1,21 @@
 ---
 name: literature-cite
-description: Add or correct citations and BibTeX entries. Use when the user asks to cite guidelines, Sepsis-3, or related work.
+description: Deprecated migration material. Do not load in MedPrism runtime; use the citation workflow with nature-citation instead.
+status: deprecated
 ---
 
-# Literature cite
+# Literature cite (deprecated, do not enable)
 
-## Hard rules
+This adapter is retained only to explain the migration from the old suggestion
+fence protocol. It is not registered or imported by the MedPrism runtime.
 
-1. **Never invent** bibliographic metadata (PMID, DOI, year, authors, title).
-2. Always prefer results from the `paper_search` tool (Europe PMC).
-3. BibTeX in suggestions must be copied from tool-provided `bibtex` fields (deterministic). You may only choose which hit to use and where to `\cite{key}`.
+Do not follow the old instructions below. In particular, do not emit
+`suggestion` fences, BibTeX, cite keys, or direct file edits from a model.
+Those operations now belong to the trusted citation runtime. Use
+`skills/nature-citation/SKILL.md` for candidate judgement only.
 
-## Required workflow
+## Migration notes
 
-1. Ensure `paper_search` has been run for the user's topic.
-2. If zero hits: tell the user nothing was found; do not fabricate.
-3. If hits exist: pick the best matching entry; use its `bibtex` as the `.bib` suggestion body.
-4. Propose a second suggestion (if needed) for the `.tex` file inserting `\cite{citeKey}` near the relevant claim.
-5. Output using the suggestion fence protocol (`path` + `title` + body).
-
-## Example intent
-
-User: "补充 Sepsis-3 引用" → search → insert cite + BibTeX from hits only.
+The supported flow is: runtime search -> candidate-only judgement -> runtime
+metadata verification -> runtime cite-key/BibTeX allocation -> atomic `.tex` +
+`.bib` transaction.

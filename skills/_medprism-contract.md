@@ -1,5 +1,9 @@
 # MedPrism V1 workflow contract
 
+This file describes the currently loaded adapter boundary. A more explicit,
+reviewable version is staged under [`staged/_medprism-adapter-contract.md`](staged/_medprism-adapter-contract.md)
+and is intentionally not enabled.
+
 ## Stable workflows
 
 | Workflow | Model responsibility | Runtime responsibility |
@@ -20,3 +24,10 @@
 5. Hashes, revisions, patch IDs, cite keys, BibTeX, and compile job IDs are runtime-owned.
 6. Invalid structured output is display-only and never Keep-eligible.
 7. Deprecated `section-revise` and `literature-cite` are not runtime sources of truth.
+
+## Staged activation boundary
+
+The staged adapters must remain out of `src/lib/workflows/*` imports until
+contract-lint, parser fixtures, and end-to-end transaction tests pass. Adding
+or editing a Markdown file under `skills/staged/` does not change runtime
+behavior.

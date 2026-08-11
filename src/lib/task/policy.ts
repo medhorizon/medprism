@@ -96,11 +96,18 @@ function namedSlot(text: string): ManuscriptSlotKind | undefined {
   return SLOT_PATTERNS.find(([, pattern]) => pattern.test(text))?.[0];
 }
 
-function mentionedSlots(text: string): Array<{ slot: ManuscriptSlotKind; index: number }> {
-  const found: Array<{ slot: ManuscriptSlotKind; index: number }> = [];
+type SlotMention = { slot: ManuscriptSlotKind; index: number; end: number };
+
+type WritingSlotRoles = {
+  target: ManuscriptSlotKind;
+  contextSlots: TaskContextSlot[];
+};
+
+function mentionedSlots(text: string): SlotMention[] {
+  const found: SlotMention[] = [];
   for (const [slot, pattern] of SLOT_PATTERNS) {
-    const index = text.search(pattern);
-    if (index >= 0) found.push({ slot, index });
+    const match = new RegExp(pattern.source, pattern.flags.replace("g", "")).exec(text);
+    if (match?.index !== undefined) found.push({ slot, index: match.index, end: match.index + match[0].length });
   }
   return found.sort((a, b) => a.index - b.index);
 }
@@ -118,18 +125,76 @@ function uniqueSlotsInOrder(
   return ordered;
 }
 
-function basedOnContextTarget(text: string): {
-  target: ManuscriptSlotKind;
-  contextSlots: TaskContextSlot[];
-} | null {
-  if (!/(?:基于|根据|依据|参考|围绕|结合|based\s+on|according\s+to|using|from)/i.test(text)) return null;
-  if (!/(?:写|撰写|起草|生成|补充|扩写|续写|draft|write|compose|generate|expand|continue)/i.test(text)) return null;
-  const slots = uniqueSlotsInOrder(mentionedSlots(text));
-  if (slots.length < 2) return null;
-  const target = slots[slots.length - 1]!;
-  const contextSlots = slots.slice(0, -1).filter((slot) => slot !== target).map((slot) => ({ slot }));
-  if (contextSlots.length === 0) return null;
-  return { target, contextSlots };
+function allMatches(text: string, pattern: RegExp): Array<{ index: number; end: number }> {
+  const globalPattern = new RegExp(pattern.source, pattern.flags.includes("g") ? pattern.flags : `${pattern.flags}g`);
+  return [...text.matchAll(globalPattern)].map((match) => ({
+    index: match.index ?? 0,
+    end: (match.index ?? 0) + match[0].length,
+  }));
+}
+
+/** Resolve source/destination roles before a TaskSpec reaches the resolver. */
+function writingSlotRoles(text: string): WritingSlotRoles | null {
+  const sourceCues = allMatches(
+    text,
+    /(?:就(?:该|此|这个|这份|上述)?|基于|根据|依据|参考|围绕|结合|\bbased\s+on\b|\baccording\s+to\b|\busing\b|\bfrom\b)/i,
+  );
+  const writeActions = allMatches(
+    text,
+    /(?:写|撰写|起草|生成|补充|扩写|续写|完善|\bdraft\b|\bwrite\b|\bcompose\b|\bgenerate\b|\bexpand\b|\bcontinue\b|\bcomplete\b)/i,
+  );
+  const mentions = mentionedSlots(text);
+  let best: { roles: WritingSlotRoles; distance: number } | null = null;
+
+  for (const cue of sourceCues) {
+    for (const action of writeActions) {
+      const contextMentions = cue.index < action.index
+        ? mentions.filter((mention) => mention.index >= cue.end && mention.end <= action.index)
+        : mentions.filter((mention) => mention.index >= cue.end);
+      const targetMentions = cue.index < action.index
+        ? mentions.filter((mention) => mention.index >= action.end)
+        : mentions.filter((mention) => mention.index >= action.end && mention.end <= cue.index);
+      const targetMention = targetMentions[0];
+      if (!targetMention || contextMentions.length === 0) continue;
+
+      const contextSlots = uniqueSlotsInOrder(contextMentions)
+        .filter((slot) => slot !== targetMention.slot)
+        .map((slot) => ({ slot }));
+      if (contextSlots.length === 0) continue;
+
+      const candidate = {
+        roles: { target: targetMention.slot, contextSlots },
+        distance: Math.abs(action.index - cue.index),
+      };
+      if (!best || candidate.distance < best.distance) best = candidate;
+    }
+  }
+
+  return best?.roles ?? null;
+}
+
+function directWritingTarget(text: string): ManuscriptSlotKind | undefined {
+  if (!/(?:写|撰写|起草|生成|补充|扩写|续写|完善|润色|改写|重写|draft|write|compose|generate|expand|continue|complete|polish|rewrite|rephrase)/i.test(text)) {
+    return undefined;
+  }
+  const mentions = mentionedSlots(text);
+  return mentions.length === 1 ? mentions[0]?.slot : undefined;
+}
+
+export function normalizeWritingTaskRoles(userText: string, spec: TaskSpec): TaskSpec {
+  if (spec.applyMode !== "propose-patch" || !["draft", "polish"].includes(spec.action)) return spec;
+  const roles = writingSlotRoles(userText) ?? (() => {
+    const target = directWritingTarget(userText);
+    return target ? { target, contextSlots: [] } : null;
+  })();
+  if (!roles) return spec;
+  const existingTarget = spec.targets.find((target) => target.slot === roles.target);
+  return {
+    ...spec,
+    scope: "targets",
+    targets: [targetFor(roles.target, existingTarget?.sourceIds ?? [])],
+    contextSlots: roles.contextSlots,
+  };
 }
 
 function answerAction(text: string, lockedAction?: TaskAction): TaskAction {
@@ -174,6 +239,10 @@ function isHighConfidenceDraftRequest(text: string): boolean {
   return /(?:帮我|请|please)?\s*(?:写|撰写|起草|生成|补充|扩写|续写|完善|draft|write|compose|generate|expand|continue|complete)/i.test(text);
 }
 
+function isHighConfidencePolishRequest(text: string): boolean {
+  return /(?:润色|改写|重写|polish|rewrite|rephrase)/i.test(text) && directWritingTarget(text) !== undefined;
+}
+
 function isLatexCleanupRequest(text: string): boolean {
   return /(?:修正|修复|清理|去掉|删除|纯文本|编译|格式|markdown|latex|LaTeX|code\s*fence|\*\*)/i.test(text) &&
     /(?:latex|LaTeX|编译|格式|markdown|\*\*|纯文本|source|tex\b)/i.test(text);
@@ -195,7 +264,7 @@ export function runtimeHighConfidenceFallbackTask(args: {
   if (!args.policy.allowLlmApplyMode) return null;
   if (requestsExploration(args.userText) || requestsFileCommit(args.userText)) return null;
 
-  const based = basedOnContextTarget(args.userText);
+  const based = writingSlotRoles(args.userText);
   if (based) {
     const spec: TaskSpec = {
       schemaVersion: "2",
@@ -211,12 +280,13 @@ export function runtimeHighConfidenceFallbackTask(args: {
   }
 
   const slot = namedSlot(args.userText);
-  if (slot && isHighConfidenceDraftRequest(args.userText)) {
+  if (slot && (isHighConfidenceDraftRequest(args.userText) || isHighConfidencePolishRequest(args.userText))) {
+    const action = isHighConfidencePolishRequest(args.userText) ? "polish" : "draft";
     const spec: TaskSpec = {
       schemaVersion: "2",
-      action: "draft",
+      action,
       applyMode: "propose-patch",
-      contentMode: "generate",
+      contentMode: actionContentMode(action),
       scope: "targets",
       evidenceMode: "none",
       targets: [targetFor(slot)],
@@ -271,29 +341,37 @@ export function runtimeFallbackTask(args: {
     return { ok: true, spec, sources: args.sources, source: "runtime", repaired: args.repaired ?? true };
   }
 
-  const slot = namedSlot(args.userText);
   const assignment = mostRecentAssignment(args.sources);
   if (!args.lockedAction && !assignment && HISTORY_REFERENCE_RE.test(args.userText)) return null;
   let action = patchAction(args.userText, args.lockedAction);
   let targets: TaskTarget[] = [];
   let scope: TaskScope = args.selectionAvailable ? "selection" : "targets";
+  let contextSlots: TaskContextSlot[] = [];
 
-  if (!args.lockedAction && assignment && slot) {
-    action = "fill-sections";
-    targets = [targetFor(slot, [assignment.id])];
-  } else if (slot) {
-    targets = [targetFor(slot)];
-  } else if (action === "compile-fix") {
-    scope = "compile-log";
-  } else if (
-    action === "polish" &&
-    (args.lockedAction === "polish" || /(?:全文|文章|稿件|manuscript|paper)/i.test(args.userText))
-  ) {
-    scope = "manuscript";
-  } else if (action === "cite") {
-    scope = args.selectionAvailable ? "selection" : "manuscript";
-  } else if (!args.selectionAvailable) {
-    return null;
+  const writingRoles = writingSlotRoles(args.userText);
+  if (writingRoles && ["draft", "polish"].includes(action)) {
+    targets = [targetFor(writingRoles.target)];
+    contextSlots = writingRoles.contextSlots;
+    scope = "targets";
+  } else {
+    const slot = namedSlot(args.userText);
+    if (!args.lockedAction && assignment && slot) {
+      action = "fill-sections";
+      targets = [targetFor(slot, [assignment.id])];
+    } else if (slot) {
+      targets = [targetFor(slot)];
+    } else if (action === "compile-fix") {
+      scope = "compile-log";
+    } else if (
+      action === "polish" &&
+      (args.lockedAction === "polish" || /(?:全文|文章|稿件|manuscript|paper)/i.test(args.userText))
+    ) {
+      scope = "manuscript";
+    } else if (action === "cite") {
+      scope = args.selectionAvailable ? "selection" : "manuscript";
+    } else if (!args.selectionAvailable) {
+      return null;
+    }
   }
 
   if (action === "fill-sections" && targets.length === 0) return null;
@@ -309,7 +387,7 @@ export function runtimeFallbackTask(args: {
     scope,
     evidenceMode: action === "cite" ? "literature" : "none",
     targets,
-    contextSlots: [],
+    contextSlots,
   };
   return { ok: true, spec, sources: args.sources, source: "runtime", repaired: args.repaired ?? true };
 }

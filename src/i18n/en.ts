@@ -159,6 +159,7 @@ export const en: Messages = {
   "assistant.undoConflict": "File edited after Keep — cannot safely undo",
   "assistant.placeholder": "Ask anything…",
   "assistant.send": "Send",
+  "assistant.stop": "Stop",
   "assistant.initial":
     "Your manuscript is loaded. Ask me to polish prose, align terminology, check citations and LaTeX, or tune wording for a target journal.",
   "assistant.q1": "Polish the article",

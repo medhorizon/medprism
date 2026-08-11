@@ -1,10 +1,16 @@
-﻿Source: Springer Nature journal article template (content 18782940 v12)
+Source: Springer Nature journal article template from the Overleaf package
+Archive used for this vendor snapshot: Springer_Nature_LaTeX_Template__3_.zip
+Template version: 3.1 (December 2024)
 Official: https://www.springernature.com/gp/authors/campaigns/latex-author-support
 Vendored for MedPrism. Follow publisher redistribution terms.
 
 MedPrism notes:
 - sn-article.tex is a minimal starter that compiles under Tectonic/XeTeX.
-- sn-article.official-sample.tex is the official sample with XeTeX-hostile
-  \verb+\begin{verbatim}+ / lstlisting demos neutralized.
+- sn-article.official-sample.tex is the official sample with malformed C1
+  smart quotes normalized and XeTeX-hostile inline verbatim/listings demos
+  neutralized; two lstlisting demo blocks are omitted so it compiles
+  reliably in the bundled Tectonic/XeTeX path. The official EPS figure demo
+  is kept as fig.eps but replaced with a placeholder inside the sample file,
+  because Tectonic/XeTeX cannot include EPS directly.
 - Always keep the documentclass [pdflatex,...] option so sn-jnl does not
   load breakurl (incompatible with XeTeX).

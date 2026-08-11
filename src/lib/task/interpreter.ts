@@ -10,6 +10,7 @@ import type { ManuscriptModel } from "../manuscript/types";
 import { manuscriptInventory } from "../manuscript/model";
 import { parseTaskSpec } from "./schema";
 import {
+  normalizeWritingTaskRoles,
   runtimeHighConfidenceFallbackTask,
   runtimeFallbackTask,
   runtimeTaskPolicy,
@@ -103,6 +104,8 @@ Required invariants:
 Use fill-sections when the user supplies the exact replacement text, including commands such as "change the title to X".
 Use draft only when new prose must be generated. Brainstorming, comparison, questions, and requests for candidate titles are advice until the user explicitly asks to apply one.
 For requests like "based on the title, write an introduction", target only the destination slot (introduction) and put title in contextSlots.
+Keep intent/action, destination, and source context separate: a slot after a writing verb is the destination; a slot governed by "就该 / 基于 / 根据 / based on / according to / from" is read-only context.
+For "write an introduction based on the title" and "就该标题写一个 introduction", return target introduction and contextSlots title, regardless of which slot appears last.
 Targets use sourceIds copied from the supplied runtime artifact catalog. A source may come from the current user message or a prior assistant candidate. Never repeat source text in JSON.
 
 Request decision list:
@@ -316,9 +319,10 @@ export async function interpretTaskSpec(args: {
       error: result.message,
     };
   }
+  const normalizedSpec = normalizeWritingTaskRoles(args.userText, result.value);
   return {
     ok: true,
-    spec: result.value,
+    spec: normalizedSpec,
     sources,
     source: args.lockedAction ? "locked" : "llm",
     repaired: result.repaired,

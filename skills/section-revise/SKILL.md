@@ -1,8 +1,11 @@
 ---
 name: section-revise
-description: Deprecated alias — MedPrism routes polish/revise to nature-polishing.
+description: Deprecated alias. Do not load; MedPrism routes scoped revision to nature-polishing or writing.
+status: deprecated
 ---
 
-# Deprecated
+# Section revise (deprecated, do not enable)
 
-本节润色已合并到 `nature-polishing`。若仍看到本文件，说明路由未更新。
+This file is retained only as migration material. It has no MedPrism workflow
+envelope and must not be registered. Use `nature-polishing` for language-only
+changes or a writing skill for scientific-content revision.

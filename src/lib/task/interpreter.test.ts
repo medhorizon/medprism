@@ -259,6 +259,114 @@ describe("TaskSpec v2 interpreter", () => {
     });
   });
 
+  it.each([
+    "就该标题写一个 introduction",
+    "write an introduction based on the title",
+    "draft an introduction from this title",
+  ])("separates destination and source roles for %s when fallback is used", async (userText) => {
+    const sources = buildConversationArtifacts({ messageId: "u-role", role: "user", content: userText });
+    const interpreted = await interpretTaskSpec({
+      config: { mode: "mock" },
+      userText,
+      history: [],
+      model: await model(),
+      sources,
+      complete: async () => ({ ok: false, message: "invalid after repair", raw: "plain text" }),
+    });
+    expect(interpreted).toMatchObject({
+      ok: true,
+      source: "runtime",
+      spec: {
+        action: "draft",
+        applyMode: "propose-patch",
+        targets: [{ slot: "introduction", sourceIds: [] }],
+        contextSlots: [{ slot: "title" }],
+      },
+    });
+  });
+
+  it("normalizes a schema-valid but role-inconsistent model TaskSpec", async () => {
+    const userText = "就该标题写一个 introduction";
+    const sources = buildConversationArtifacts({ messageId: "u-role-model", role: "user", content: userText });
+    const interpreted = await interpretTaskSpec({
+      config: { mode: "mock" },
+      userText,
+      history: [],
+      model: await model(),
+      sources,
+      complete: async <T>(args: Parameters<typeof completeStructured<T>>[0]) => {
+        const raw = JSON.stringify({
+          schemaVersion: "2",
+          action: "draft",
+          applyMode: "propose-patch",
+          contentMode: "generate",
+          scope: "targets",
+          evidenceMode: "none",
+          targets: [{ slot: "title", sourceIds: [] }],
+          contextSlots: [],
+        });
+        const parsed = args.parse(raw);
+        if (!parsed.ok) return { ok: false as const, message: parsed.message, raw };
+        return { ok: true as const, value: parsed.value as T, raw, repaired: false };
+      },
+    });
+    expect(interpreted).toMatchObject({
+      ok: true,
+      source: "llm",
+      spec: {
+        targets: [{ slot: "introduction", sourceIds: [] }],
+        contextSlots: [{ slot: "title" }],
+      },
+    });
+  });
+
+  it("applies role separation to an explicitly locked writing fallback", async () => {
+    const userText = "就该标题写一个 introduction";
+    const sources = buildConversationArtifacts({ messageId: "u-role-locked", role: "user", content: userText });
+    const interpreted = await interpretTaskSpec({
+      config: { mode: "mock" },
+      userText,
+      history: [],
+      model: await model(),
+      sources,
+      lockedAction: "draft",
+      complete: async () => ({ ok: false, message: "invalid after repair", raw: "plain text" }),
+    });
+    expect(interpreted).toMatchObject({
+      ok: true,
+      source: "runtime",
+      spec: {
+        action: "draft",
+        applyMode: "propose-patch",
+        targets: [{ slot: "introduction", sourceIds: [] }],
+        contextSlots: [{ slot: "title" }],
+      },
+    });
+  });
+
+  it("resolves a simple polish target without requiring source artifacts", async () => {
+    const userText = "润色摘要";
+    const sources = buildConversationArtifacts({ messageId: "u-polish-abstract", role: "user", content: userText });
+    const interpreted = await interpretTaskSpec({
+      config: { mode: "mock" },
+      userText,
+      history: [],
+      model: await model(),
+      sources,
+      complete: async () => ({ ok: false, message: "invalid after repair", raw: "plain text" }),
+    });
+    expect(interpreted).toMatchObject({
+      ok: true,
+      source: "runtime",
+      spec: {
+        action: "polish",
+        applyMode: "propose-patch",
+        targets: [{ slot: "abstract", sourceIds: [] }],
+        contextSlots: [],
+      },
+    });
+  });
+
   it("falls back to a high-confidence assisted-writing transaction when classification fails", async () => {
     const userText = "请帮我补充讨论部分";
     const sources = buildConversationArtifacts({ messageId: "u1", role: "user", content: userText });

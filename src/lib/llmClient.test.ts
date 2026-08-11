@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { consumeSseBuffer, extractStreamDelta } from "./llmClient";
+import {
+  consumeSseBuffer,
+  extractResponseContent,
+  extractStreamDelta,
+} from "./llmClient";
 
 describe("llmClient streaming helpers", () => {
   it("extracts delta content from OpenAI SSE payloads", () => {
@@ -9,6 +13,19 @@ describe("llmClient streaming helpers", () => {
       }),
     ).toBe("Hello");
     expect(extractStreamDelta({ choices: [{ delta: {} }] })).toBe("");
+    expect(extractStreamDelta({
+      choices: [{ delta: { content: [{ type: "text", text: "Array delta" }] } }],
+    })).toBe("Array delta");
+  });
+
+  it("accepts common OpenAI-compatible non-streaming text shapes", () => {
+    expect(extractResponseContent({
+      choices: [{ message: { content: [{ type: "text", text: "Hello" }, { type: "text", text: " world" }] } }],
+    })).toBe("Hello world");
+    expect(extractResponseContent({ choices: [{ text: "Legacy completion" }] }))
+      .toBe("Legacy completion");
+    expect(extractResponseContent({ output_text: "Responses-compatible text" }))
+      .toBe("Responses-compatible text");
   });
 
   it("consumes framed SSE buffers and keeps an incomplete trailer", () => {

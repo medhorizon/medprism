@@ -109,11 +109,21 @@ function workflowForAction(action: TaskAction): WorkflowKind {
   return "writing";
 }
 
+function workflowForResolvedTask(resolved: ResolvedTask): WorkflowKind {
+  if (
+    resolved.spec.applyMode === "answer-only" &&
+    (resolved.spec.action === "draft" || resolved.spec.action === "polish")
+  ) {
+    return "advice";
+  }
+  return workflowForAction(resolved.spec.action);
+}
+
 function workflowRequestFromTask(
   req: RuntimeRequest,
   resolved: ResolvedTask,
 ): WorkflowRequest {
-  const kind = workflowForAction(resolved.spec.action);
+  const kind = workflowForResolvedTask(resolved);
   const applyToLatex = resolved.spec.applyMode === "propose-patch";
   return {
     kind,

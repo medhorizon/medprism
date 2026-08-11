@@ -74,7 +74,7 @@ export type AssistantOutcomeKind =
 export type ChatExecution = {
   schemaVersion: "1";
   outcome: AssistantOutcomeKind;
-  taskSource: "llm" | "locked" | "invalid" | "resumed";
+  taskSource: "llm" | "locked" | "runtime" | "invalid" | "resumed";
   action?: TaskSpec["action"];
   targetCount: number;
   failureCode?: string;

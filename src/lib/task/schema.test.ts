@@ -135,4 +135,45 @@ describe("TaskSpec v2 schema", () => {
       targets: [],
     }), sources, { selectionAvailable: false }).ok).toBe(false);
   });
+
+  it("separates conversational writing semantics from file permission", () => {
+    const conversationalPolish = {
+      schemaVersion: "2",
+      action: "polish",
+      applyMode: "answer-only",
+      contentMode: "generate",
+      scope: "manuscript",
+      evidenceMode: "none",
+      targets: [],
+    };
+    expect(parseTaskSpec(JSON.stringify(conversationalPolish), sources).ok).toBe(true);
+    expect(parseTaskSpec(JSON.stringify({
+      ...conversationalPolish,
+      applyMode: "propose-patch",
+    }), sources).ok).toBe(true);
+    expect(parseTaskSpec(JSON.stringify({
+      ...conversationalPolish,
+      action: "cite",
+      applyMode: "propose-patch",
+      contentMode: "none",
+      evidenceMode: "literature",
+    }), sources).ok).toBe(true);
+  });
+
+  it("treats runtime permission as authoritative", () => {
+    const modelRequestedPatch = JSON.stringify({
+      schemaVersion: "2",
+      action: "polish",
+      applyMode: "propose-patch",
+      contentMode: "generate",
+      scope: "manuscript",
+      evidenceMode: "none",
+      targets: [],
+    });
+    const parsed = parseTaskSpec(modelRequestedPatch, sources, {
+      authoritativeApplyMode: "answer-only",
+    });
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) expect(parsed.value.applyMode).toBe("answer-only");
+  });
 });

@@ -87,6 +87,21 @@ function targetedDraft(text: string, workflow: "writing" | "polish" = "writing",
   });
 }
 
+function unresearchedTargetedDraft(text: string, workflow: "writing" | "polish" = "polish") {
+  return JSON.stringify({
+    schemaVersion: "1",
+    workflow,
+    summary: "Draft target text",
+    warnings: [],
+    content: "Target text is ready.",
+    textDraft: {
+      text,
+      format: "plain-text",
+      sourceCandidateIds: [],
+    },
+  });
+}
+
 describe("workflow executor", () => {
   it("registers eight deterministic workflows, including advice and independent research", () => {
     expect(listWorkflows().sort()).toEqual([
@@ -193,6 +208,68 @@ describe("workflow executor", () => {
       expect(simulated.simulation.nextFiles["main.tex"]).toContain(
         "\\section*{Ethics approval and consent to participate}",
       );
+    }
+  });
+
+  it("polishes an unselected manuscript as one atomic multi-target PatchSet", async () => {
+    const source = [
+      "\\documentclass{article}",
+      "\\begin{document}",
+      "\\section{Introduction}", "Old introduction prose.",
+      "\\section{Methods}", "Old methods prose.",
+      "\\section{Results}", "Old results prose.",
+      "\\section{Discussion}", "Old discussion prose.",
+      "\\section{Conclusion}", "Old conclusion prose.",
+      "\\end{document}",
+    ].join("\n");
+    const ctx = context({ source });
+    const snapshot = await buildContextSnapshot(ctx);
+    const resolvedTask = resolveTaskContext({
+      snapshot,
+      model: buildManuscriptModel(snapshot),
+      interpreted: {
+        ok: true,
+        spec: {
+          schemaVersion: "2",
+          action: "polish",
+          applyMode: "propose-patch",
+          contentMode: "generate",
+          scope: "manuscript",
+          evidenceMode: "none",
+          targets: [],
+        },
+        sources: [],
+        source: "runtime",
+        repaired: true,
+      },
+    });
+    const replacements = [
+      "Revised introduction prose.",
+      "Revised methods prose.",
+      "Revised results prose.",
+      "Revised discussion prose.",
+      "Revised conclusion prose.",
+    ];
+    const result = await executeWorkflow({
+      request: {
+        kind: "polish",
+        userText: "润色文章",
+        resolvedTask,
+        plan: { primary: "polish", steps: ["polish", "latex-apply"], applyToLatex: true },
+      },
+      config,
+      history: [],
+      ctx,
+    }, services({ modelResponses: replacements.map((text) => unresearchedTargetedDraft(text)) }));
+
+    expect(result.agent.patch?.operations).toHaveLength(5);
+    expect(result.agent.patch?.verify?.compile).toBe(true);
+    const simulated = await simulatePatchSet({ "main.tex": source }, result.agent.patch!);
+    expect(simulated.ok).toBe(true);
+    if (simulated.ok) {
+      for (const replacement of replacements) {
+        expect(simulated.simulation.nextFiles["main.tex"]).toContain(replacement);
+      }
     }
   });
 

@@ -62,6 +62,33 @@ function joinChatUrl(baseUrl: string): string {
   return `${base}/chat/completions`;
 }
 
+function contentText(value: unknown): string | null {
+  if (typeof value === "string") return value;
+  if (!Array.isArray(value)) return null;
+  const parts: string[] = [];
+  for (const part of value) {
+    if (typeof part === "string") {
+      parts.push(part);
+      continue;
+    }
+    if (!part || typeof part !== "object" || Array.isArray(part)) continue;
+    const record = part as Record<string, unknown>;
+    if (typeof record.text === "string") {
+      parts.push(record.text);
+      continue;
+    }
+    if (
+      record.text &&
+      typeof record.text === "object" &&
+      !Array.isArray(record.text) &&
+      typeof (record.text as Record<string, unknown>).value === "string"
+    ) {
+      parts.push((record.text as Record<string, string>).value);
+    }
+  }
+  return parts.length > 0 ? parts.join("") : null;
+}
+
 /** Extract incremental text from one OpenAI-compatible SSE JSON payload. */
 export function extractStreamDelta(data: unknown): string {
   if (!data || typeof data !== "object") return "";
@@ -72,12 +99,12 @@ export function extractStreamDelta(data: unknown): string {
   const choice = choices[0] as {
     delta?: { content?: unknown };
     message?: { content?: unknown };
+    text?: unknown;
   };
-  const fromDelta = choice.delta?.content;
-  if (typeof fromDelta === "string") return fromDelta;
-  const fromMessage = choice.message?.content;
-  if (typeof fromMessage === "string") return fromMessage;
-  return "";
+  return contentText(choice.delta?.content)
+    ?? contentText(choice.message?.content)
+    ?? contentText(choice.text)
+    ?? "";
 }
 
 /** Parse an SSE chunk buffer; returns emitted text deltas and leftover bytes. */
@@ -156,6 +183,21 @@ export async function chatCompletions(args: {
   }
 
   if (!stream) {
+    let data: unknown;
+    try {
+      data = await response.json();
+    } catch {
+      throw new LlmClientError("bad_response", "Invalid JSON response");
+    }
+    const content = extractContent(data);
+    if (content == null || content === "") {
+      throw new LlmClientError("bad_response", "Empty model response");
+    }
+    onDelta?.(content);
+    return content;
+  }
+
+  if (/\bapplication\/json\b/i.test(response.headers.get("content-type") ?? "")) {
     let data: unknown;
     try {
       data = await response.json();
@@ -261,17 +303,23 @@ export async function completeStructured<T>(args: {
   };
 }
 
-function extractContent(data: unknown): string | null {
+export function extractResponseContent(data: unknown): string | null {
   if (!data || typeof data !== "object") return null;
   const choices = (data as { choices?: unknown }).choices;
-  if (!Array.isArray(choices) || !choices[0] || typeof choices[0] !== "object") {
-    return null;
+  if (Array.isArray(choices) && choices[0] && typeof choices[0] === "object") {
+    const choice = choices[0] as Record<string, unknown>;
+    const message = choice.message;
+    if (message && typeof message === "object" && !Array.isArray(message)) {
+      const fromMessage = contentText((message as Record<string, unknown>).content);
+      if (fromMessage !== null) return fromMessage;
+    }
+    const fromChoice = contentText(choice.text);
+    if (fromChoice !== null) return fromChoice;
   }
-  const message = (choices[0] as { message?: { content?: unknown } }).message;
-  const content = message?.content;
-  if (typeof content === "string") return content;
-  return null;
+  return contentText((data as Record<string, unknown>).output_text);
 }
+
+const extractContent = extractResponseContent;
 
 async function safeText(response: Response): Promise<string> {
   try {

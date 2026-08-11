@@ -18,7 +18,7 @@ import {
   detectWritingDomain,
   isNatureWritingRequest,
 } from "../skillRouter";
-import { finalizeModelPatchProposal } from "./latexApply";
+import { finalizeModelPatchProposal, finalizePatchSet } from "./latexApply";
 import { buildWorkflowSystemPrompt } from "./prompt";
 import { runTargetedTextWorkflow } from "./textWriting";
 import { runSemanticWriting } from "./semanticWriting";
@@ -111,6 +111,98 @@ function resolvedTextTarget(
   return { ok: false, message: "The semantic text target could not be resolved." };
 }
 
+function resolvedTextTargets(
+  snapshot: ContextSnapshot,
+  resolved: ResolvedTask,
+): { ok: true; targets: ResolvedLatexTarget[] } | { ok: false; message: string } {
+  if (resolved.selection) {
+    const target = resolvedTextTarget(snapshot, resolved);
+    return target.ok ? { ok: true, targets: [target.target] } : target;
+  }
+  if (resolved.targets.length === 0) {
+    return { ok: false, message: "Generated or polished prose requires at least one resolved semantic target." };
+  }
+  const targets: ResolvedLatexTarget[] = [];
+  for (const binding of resolved.targets) {
+    const target = resolvedTextTarget(snapshot, { ...resolved, targets: [binding] });
+    if (!target.ok) return target;
+    targets.push(target.target);
+  }
+  return { ok: true, targets };
+}
+
+async function runAtomicTargetedTextWorkflow(args: {
+  input: WorkflowExecutionInput;
+  snapshot: ContextSnapshot;
+  skill: ReturnType<typeof selectedWritingSkill>;
+  targets: ResolvedLatexTarget[];
+}): Promise<WorkflowResult> {
+  if (args.targets.length === 1) {
+    return runTargetedTextWorkflow({
+      input: args.input,
+      snapshot: args.snapshot,
+      skill: args.skill,
+      resolvedTarget: args.targets[0]!,
+    });
+  }
+
+  const results: WorkflowResult[] = [];
+  for (const target of args.targets) {
+    const result = await runTargetedTextWorkflow({
+      input: args.input,
+      snapshot: args.snapshot,
+      skill: args.skill,
+      resolvedTarget: target,
+    });
+    if (!result.agent.patch) {
+      return invalidModelResult(
+        args.input.request.kind,
+        result.agent.warnings.join(" ") || `No safe draft was produced for ${target.heading ?? target.kind}.`,
+      );
+    }
+    results.push(result);
+  }
+
+  const operations = results
+    .flatMap((result) => result.agent.patch!.operations)
+    .sort((left, right) => {
+      const byPath = left.path.localeCompare(right.path);
+      if (byPath !== 0) return byPath;
+      const leftStart = left.op === "replace_text" ? left.range?.start ?? -1 : -1;
+      const rightStart = right.op === "replace_text" ? right.range?.start ?? -1 : -1;
+      return rightStart - leftStart;
+    });
+  const operationLabel = args.input.request.kind === "polish" ? "Polish" : "Write";
+  const patchSet = {
+    schemaVersion: "1" as const,
+    id: crypto.randomUUID(),
+    projectRevision: args.snapshot.projectRevision,
+    summary: `${operationLabel} ${args.targets.length} manuscript sections atomically`,
+    operations,
+    verify: { compile: true },
+  };
+  const finalized = await finalizePatchSet(args.snapshot, patchSet);
+  if (!finalized.ok) {
+    return invalidModelResult(args.input.request.kind, finalized.error.message);
+  }
+  return {
+    agent: {
+      schemaVersion: "1",
+      workflow: args.input.request.kind,
+      summary: patchSet.summary,
+      warnings: results.flatMap((result) => result.agent.warnings),
+      patch: finalized.patchSet,
+    },
+    content: `Prepared one atomic manuscript transaction covering ${args.targets.length} semantic sections. Review the combined Diff before choosing Keep.`,
+    toolNotes: [
+      `workflow:${args.input.request.kind}:multi-target`,
+      `targets:${args.targets.length}`,
+      `skill:${args.skill.id}`,
+      ...results.flatMap((result) => result.toolNotes),
+    ],
+  };
+}
+
 function projectHint(input: WorkflowExecutionInput): string {
   const path = input.ctx.activeFile ?? input.ctx.mainFile ?? Object.keys(input.ctx.files)[0];
   return path ? (input.ctx.files[path] ?? "").slice(0, 2000) : "";
@@ -169,9 +261,9 @@ export const runWritingWorkflow: WorkflowHandler = async (input) => {
     input.request.resolvedTask &&
     (input.request.resolvedTask.spec.action === "draft" || input.request.resolvedTask.spec.action === "polish")
   ) {
-    const target = resolvedTextTarget(snapshot, input.request.resolvedTask);
-    if (!target.ok) return invalidModelResult(kind, target.message);
-    return runTargetedTextWorkflow({ input, snapshot, skill, resolvedTarget: target.target });
+    const targets = resolvedTextTargets(snapshot, input.request.resolvedTask);
+    if (!targets.ok) return invalidModelResult(kind, targets.message);
+    return runAtomicTargetedTextWorkflow({ input, snapshot, skill, targets: targets.targets });
   }
   const target = input.request.plan?.target;
 

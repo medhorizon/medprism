@@ -83,6 +83,40 @@ describe("natural conversation file transactions", () => {
     expect(savedReply.artifacts?.filter((artifact) => artifact.kind === "emphasis")).toHaveLength(2);
   });
 
+  it("routes conversational title rewriting through streamed answer semantics, not a file workflow", async () => {
+    const content = "英文改写标题：《基于单细胞转录组的肝细胞癌早期筛查》";
+    const user = withConversationArtifacts({ id: "u1", role: "user", content });
+    const result = await runAssistant(request(content, [user]), {
+      interpret: async () => ({
+        ok: true,
+        spec: {
+          schemaVersion: "2",
+          action: "polish",
+          applyMode: "answer-only",
+          contentMode: "generate",
+          scope: "manuscript",
+          evidenceMode: "none",
+          targets: [],
+        },
+        sources: user.artifacts!,
+        source: "runtime",
+        repaired: true,
+      }),
+      execute: async (input) => {
+        expect(input.request.kind).toBe("advice");
+        expect(input.request.plan?.applyToLatex).toBe(false);
+        return {
+          agent: { schemaVersion: "1", workflow: "advice", summary: "English title", warnings: [] },
+          content: "Single-Cell Transcriptomics for Early Detection of Hepatocellular Carcinoma",
+          toolNotes: [],
+        };
+      },
+    });
+    expect(result.outcome).toBe("answer");
+    expect(result.suggestions).toEqual([]);
+    expect(result.execution).toMatchObject({ taskSource: "runtime", action: "polish" });
+  });
+
   it("asks for confirmation, then creates a canonical title PatchSet without reinterpreting", async () => {
     const user = withConversationArtifacts({
       id: "u3",

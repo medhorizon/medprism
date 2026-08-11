@@ -148,6 +148,44 @@ describe("semantic Context Resolver", () => {
     expect(resolved.errors).toContain("No trusted selection or semantic target is available for this file transaction.");
   });
 
+  it("expands manuscript polish to canonical main-section bindings", async () => {
+    const source = [
+      "\\documentclass{article}",
+      "\\begin{document}",
+      "\\section{Introduction}", "Intro.",
+      "\\section{Methods}", "Methods.",
+      "\\section{Results}", "Results.",
+      "\\section{Discussion}", "Discussion.",
+      "\\section{Conclusion}", "Conclusion.",
+      "\\end{document}",
+    ].join("\n");
+    const snapshot = await buildContextSnapshot({ projectId: "p", files: { "main.tex": source }, mainFile: "main.tex" });
+    const model = buildManuscriptModel(snapshot);
+    const resolved = resolveTaskContext({
+      snapshot,
+      model,
+      interpreted: {
+        ok: true,
+        spec: {
+          schemaVersion: "2",
+          action: "polish",
+          applyMode: "propose-patch",
+          contentMode: "generate",
+          scope: "manuscript",
+          evidenceMode: "none",
+          targets: [],
+        },
+        sources: [],
+        source: "runtime",
+        repaired: true,
+      },
+    });
+    expect(resolved.errors).toEqual([]);
+    expect(resolved.targets.map((target) => target.ref.slot)).toEqual([
+      "introduction", "methods", "results", "discussion", "conclusion",
+    ]);
+  });
+
   it("splits an unselected target section into runtime-owned claim ranges", async () => {
     const source = "\\documentclass{article}\n\\begin{document}\n\\section{Discussion}\nFirst claim needs evidence. Second claim also needs support.\n\\end{document}";
     const snapshot = await buildContextSnapshot({ projectId: "p", files: { "main.tex": source }, mainFile: "main.tex" });

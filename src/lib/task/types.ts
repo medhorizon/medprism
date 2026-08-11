@@ -45,7 +45,7 @@ export type InterpretedTask = {
   | {
       ok: true;
       spec: TaskSpec;
-      source: "llm" | "locked";
+      source: "llm" | "locked" | "runtime";
       repaired: boolean;
     }
   | {

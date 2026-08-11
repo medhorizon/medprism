@@ -213,7 +213,12 @@ export async function runTargetedTextWorkflow(args: {
     },
   ];
 
-  const raw = await input.services.complete({ config: input.config, messages });
+  const raw = await input.services.complete({
+    config: input.config,
+    messages,
+    stream: false,
+    ...(input.signal ? { signal: input.signal } : {}),
+  });
   const parsed = parseModelWorkflowEnvelope(raw, workflow);
   if (!parsed.ok) return invalidTargetedTextResult(workflow, parsed.error.message);
   if (

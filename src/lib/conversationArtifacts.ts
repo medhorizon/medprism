@@ -96,8 +96,8 @@ export function buildConversationArtifacts(args: {
   }
 
   const assignmentPatterns = [
-    /(?:修改|替换|更新|设置|设为|改为|改成|换成|定稿为|写入|填入|采用|使用)(?:[^\r\n：:]{0,32}?)(?:为|成|：|:)\s*(.+)$/gim,
-    /(?:set|change|replace|update|write|insert|apply|use)(?:[^\r\n:]{0,48}?)(?:\s+(?:to|with|as)|:)\s+(.+)$/gim,
+    /(?:修改|替换|更新|改写|设置|设为|改为|改成|换成|定稿为|写入|填入|采用|使用)(?:[^\r\n：:]{0,32}?)(?:为|成|：|:)\s*(.+)$/gim,
+    /(?:set|change|replace|rewrite|update|write|insert|apply|use)(?:[^\r\n:]{0,48}?)(?:\s+(?:to|with|as)|:)\s+(.+)$/gim,
   ];
   for (const pattern of assignmentPatterns) {
     for (const match of content.matchAll(pattern)) {

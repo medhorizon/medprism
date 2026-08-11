@@ -186,8 +186,16 @@ export function resolveTaskContext(args: {
         text: snapshot.localContext,
       });
     }
-    if (interpreted.spec.action === "cite" && defaults.length > 0) {
+    if (
+      ["cite", "polish"].includes(interpreted.spec.action) &&
+      interpreted.spec.scope === "manuscript" &&
+      defaults.length > 0
+    ) {
       for (const occurrence of defaults) {
+        if (occurrencesForSlot(model, occurrence.ref).length > 1) {
+          errors.push(`Semantic slot ${slotKey(occurrence.ref)} has multiple active occurrences.`);
+          continue;
+        }
         bindings.push({
           id: `binding:${occurrence.id}`,
           ref: occurrence.ref,

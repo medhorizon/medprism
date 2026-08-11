@@ -11,6 +11,14 @@ describe("conversation artifacts", () => {
     expect(chinese.find((artifact) => artifact.kind === "assignment-value")?.text)
       .toBe("Single-Cell Transcriptomic NMF Patterns");
 
+    const rewritten = buildConversationArtifacts({
+      messageId: "u-rewrite",
+      role: "user",
+      content: "改写标题为A Runtime-Owned Rewrite",
+    });
+    expect(rewritten.find((artifact) => artifact.kind === "assignment-value")?.text)
+      .toBe("A Runtime-Owned Rewrite");
+
     const english = buildConversationArtifacts({
       messageId: "u2",
       role: "user",

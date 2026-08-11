@@ -18,6 +18,11 @@ function asksForCurrentSubmissionPolicy(text: string): boolean {
 export const runAdviceWorkflow: WorkflowHandler = async (input) => {
   const resolved = input.request.resolvedTask;
   if (!resolved) return unavailable("Resolved TaskSpec context is missing");
+  const semanticInstruction = resolved.spec.action === "polish"
+    ? "Rewrite or translate the requested scientific text directly in the answer. Do not claim that a project file was changed."
+    : resolved.spec.action === "draft"
+      ? "Draft the requested scientific text directly in the answer. Do not claim that a project file was changed."
+      : "Answer the user's scientific-writing question directly.";
   const context = resolved.contextBlocks.map((block) => ({
     id: block.id,
     path: block.path,
@@ -30,6 +35,7 @@ export const runAdviceWorkflow: WorkflowHandler = async (input) => {
         role: "system",
         content: [
           "You are MedPrism's advice-only scientific writing assistant.",
+          semanticInstruction,
           "Answer the user directly in plain text. Never propose, describe, or encode file patches.",
           "Preserve claim strength and never invent data, citations, journal policies, DOI, or PMID.",
           "If the user asks for current journal submission requirements, explain that no official guideline retrieval was performed and that requirements must be verified against the journal website.",

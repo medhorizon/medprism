@@ -91,12 +91,17 @@ function invariantError(spec: TaskSpec): string | null {
     if (spec.applyMode !== "answer-only" || spec.contentMode !== "none" || spec.targets.length !== 0) {
       return `${spec.action} must be answer-only with no content or targets`;
     }
-  } else if (spec.applyMode !== "propose-patch") {
-    return `${spec.action} must use propose-patch`;
+  } else if (
+    spec.applyMode === "answer-only" &&
+    !["draft", "polish"].includes(spec.action)
+  ) {
+    return `${spec.action} cannot run as answer-only`;
   }
   if (
-    !["advice", "review", "research", "compile-fix"].includes(spec.action) &&
+    spec.applyMode === "propose-patch" &&
+    !["compile-fix", "cite"].includes(spec.action) &&
     spec.scope !== "selection" &&
+    !(spec.action === "polish" && spec.scope === "manuscript") &&
     spec.targets.length === 0
   ) {
     return `${spec.action} requires a target or selection`;
@@ -107,7 +112,7 @@ function invariantError(spec: TaskSpec): string | null {
     }
   }
   if (spec.action === "fill-sections") {
-    if (spec.contentMode !== "provided" || spec.targets.length === 0 || spec.targets.some((target) => target.sourceIds.length === 0)) {
+    if (spec.applyMode !== "propose-patch" || spec.contentMode !== "provided" || spec.targets.length === 0 || spec.targets.some((target) => target.sourceIds.length === 0)) {
       return "fill-sections must use provided content and at least one sourced target";
     }
   }
@@ -115,12 +120,15 @@ function invariantError(spec: TaskSpec): string | null {
     if (spec.applyMode !== "propose-patch" || spec.evidenceMode !== "literature") {
       return "cite must use propose-patch and literature evidence";
     }
+    if (spec.targets.length === 0 && !["selection", "manuscript"].includes(spec.scope)) {
+      return "cite without explicit targets requires a selection or manuscript scope";
+    }
   }
   if (spec.action === "draft" && spec.contentMode !== "generate") {
     return "draft must use generated content";
   }
-  if (spec.action === "polish" && spec.targets.length === 0 && spec.scope !== "selection") {
-    return "polish requires a target or selection";
+  if (spec.action === "polish" && !["none", "generate"].includes(spec.contentMode)) {
+    return "polish must use generated or no content mode";
   }
   if (spec.action === "compile-fix" && spec.scope !== "compile-log") {
     return "compile-fix requires compile-log scope";
@@ -135,6 +143,8 @@ export function parseTaskSpec(
     lockedAction?: TaskAction;
     requireProposePatch?: boolean;
     requireAnswerOnly?: boolean;
+    /** Runtime-owned file permission; model applyMode is treated as a recommendation only. */
+    authoritativeApplyMode?: TaskApplyMode;
     selectionAvailable?: boolean;
   },
 ): ParseTaskSpecResult {
@@ -163,7 +173,7 @@ export function parseTaskSpec(
   const spec: TaskSpec = {
     schemaVersion: "2",
     action: action as TaskAction,
-    applyMode: object.applyMode as TaskApplyMode,
+    applyMode: options?.authoritativeApplyMode ?? object.applyMode as TaskApplyMode,
     contentMode: object.contentMode as TaskContentMode,
     scope: object.scope as TaskScope,
     evidenceMode: object.evidenceMode as TaskEvidenceMode,

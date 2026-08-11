@@ -188,7 +188,7 @@ function normalizeExecution(value: unknown): ChatExecution | undefined {
   if (
     raw.schemaVersion !== "1" ||
     !["answer", "confirmation-required", "patch-proposed", "blocked"].includes(String(raw.outcome)) ||
-    !["llm", "locked", "invalid", "resumed"].includes(String(raw.taskSource)) ||
+    !["llm", "locked", "runtime", "invalid", "resumed"].includes(String(raw.taskSource)) ||
     !Number.isSafeInteger(raw.targetCount) || Number(raw.targetCount) < 0 ||
     (raw.action !== undefined && !TASK_ACTIONS.has(String(raw.action))) ||
     (raw.failureCode !== undefined && typeof raw.failureCode !== "string")

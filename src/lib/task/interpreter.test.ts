@@ -22,6 +22,7 @@ describe("TaskSpec v2 interpreter", () => {
     expect(requestsFileCommit("检查全文但不要修改项目文件")).toBe(false);
     expect(requestsFileCommit("帮我写一段摘要")).toBe(true);
     expect(requestsFileCommit("修改标题为A New Title")).toBe(true);
+    expect(requestsFileCommit("改写标题为A New Title")).toBe(true);
     expect(requestsFileCommit("采用第 3 个标题")).toBe(true);
     expect(requestsFileCommit("用刚才的英文标题")).toBe(true);
     expect(requestsFileCommit("Change the title to A New Title")).toBe(true);
@@ -61,17 +62,145 @@ describe("TaskSpec v2 interpreter", () => {
     if (interpreted.ok) expect(interpreted.spec.targets[0]?.sourceIds).toEqual([third.id]);
   });
 
-  it("returns invalid instead of a safe advice fallback after malformed structured output", async () => {
-    const sources = buildConversationArtifacts({ messageId: "u1", role: "user", content: "修改标题为New" });
+  it("keeps an unresolvable mutation blocked after malformed structured output", async () => {
+    const sources = buildConversationArtifacts({ messageId: "u1", role: "user", content: "请修改一下" });
     const interpreted = await interpretTaskSpec({
       config: { mode: "mock" },
-      userText: "修改标题为New",
+      userText: "请修改一下",
       history: [],
       model: await model(),
       sources,
       complete: async () => ({ ok: false, message: "invalid after repair", raw: "plain text" }),
     });
     expect(interpreted).toMatchObject({ ok: false, source: "invalid", error: "invalid after repair" });
+  });
+
+  it("recovers an exact title transaction from runtime artifacts when TaskSpec JSON fails", async () => {
+    const userText = "修改标题为A Runtime-Owned Title";
+    const sources = buildConversationArtifacts({ messageId: "u1", role: "user", content: userText });
+    const assignment = sources.find((source) => source.kind === "assignment-value")!;
+    const interpreted = await interpretTaskSpec({
+      config: { mode: "mock" },
+      userText,
+      history: [],
+      model: await model(),
+      sources,
+      complete: async () => ({ ok: false, message: "invalid after repair", raw: "plain text" }),
+    });
+    expect(interpreted).toMatchObject({
+      ok: true,
+      source: "runtime",
+      spec: {
+        action: "fill-sections",
+        applyMode: "propose-patch",
+        targets: [{ slot: "title", sourceIds: [assignment.id] }],
+      },
+    });
+  });
+
+  it("does not replace a failed historical reference with generated prose", async () => {
+    const prior = buildConversationArtifacts({ messageId: "a1", role: "assistant", content: "*First*\n*Second*\n*Third*" });
+    const current = buildConversationArtifacts({ messageId: "u2", role: "user", content: "采用第 3 个标题" });
+    const interpreted = await interpretTaskSpec({
+      config: { mode: "mock" },
+      userText: "采用第 3 个标题",
+      history: [{ role: "assistant", content: "*First*\n*Second*\n*Third*" }],
+      model: await model(),
+      sources: [...prior, ...current],
+      complete: async () => ({ ok: false, message: "invalid after repair", raw: "plain text" }),
+    });
+    expect(interpreted).toMatchObject({ ok: false, source: "invalid" });
+  });
+
+  it("falls back to answer-only conversational polishing when TaskSpec JSON fails", async () => {
+    const userText = "英文改写标题：《基于单细胞转录组 NMF 模式与机器学习的肝细胞癌早期筛查标志物识别》";
+    const sources = buildConversationArtifacts({ messageId: "u1", role: "user", content: userText });
+    const interpreted = await interpretTaskSpec({
+      config: { mode: "mock" },
+      userText,
+      history: [],
+      model: await model(),
+      sources,
+      complete: async () => ({ ok: false, message: "invalid after repair", raw: "plain text" }),
+    });
+    expect(interpreted).toMatchObject({
+      ok: true,
+      source: "runtime",
+      spec: { action: "polish", applyMode: "answer-only", scope: "manuscript", targets: [] },
+    });
+  });
+
+  it("answers title brainstorming without invoking the structured interpreter", async () => {
+    const userText = "帮我就以下关键词取标题：HCC，NMF，scRNA，early screen，机器学习";
+    let structuredCalled = false;
+    const interpreted = await interpretTaskSpec({
+      config: { mode: "mock" },
+      userText,
+      history: [],
+      model: await model(),
+      sources: buildConversationArtifacts({ messageId: "u1", role: "user", content: userText }),
+      complete: async () => {
+        structuredCalled = true;
+        return { ok: false, message: "must not be called", raw: "" };
+      },
+    });
+    expect(interpreted).toMatchObject({
+      ok: true,
+      source: "runtime",
+      spec: { action: "advice", applyMode: "answer-only" },
+    });
+    expect(structuredCalled).toBe(false);
+  });
+
+  it("falls back to manuscript polish for an explicit UI action", async () => {
+    const userText = "请润色当前稿件的主要表述，保持科学主张强度不变。";
+    const interpreted = await interpretTaskSpec({
+      config: { mode: "mock" },
+      userText,
+      history: [],
+      model: await model(),
+      sources: buildConversationArtifacts({ messageId: "u1", role: "user", content: userText }),
+      lockedAction: "polish",
+      complete: async () => ({ ok: false, message: "invalid after repair", raw: "plain text" }),
+    });
+    expect(interpreted).toMatchObject({
+      ok: true,
+      source: "runtime",
+      spec: { action: "polish", applyMode: "propose-patch", scope: "manuscript", targets: [] },
+    });
+  });
+
+  it("does not make exploratory rewriting depend on structured model output", async () => {
+    const userText = "英文改写标题：《旧标题》";
+    let structuredCalled = false;
+    const interpreted = await interpretTaskSpec({
+      config: { mode: "mock" },
+      userText,
+      history: [],
+      model: await model(),
+      sources: buildConversationArtifacts({ messageId: "u1", role: "user", content: userText }),
+      complete: async <T>(args: Parameters<typeof completeStructured<T>>[0]) => {
+        structuredCalled = true;
+        const raw = JSON.stringify({
+          schemaVersion: "2",
+          action: "polish",
+          applyMode: "propose-patch",
+          contentMode: "generate",
+          scope: "manuscript",
+          evidenceMode: "none",
+          targets: [],
+        });
+        const parsed = args.parse(raw);
+        if (!parsed.ok) return { ok: false as const, message: parsed.message, raw };
+        return { ok: true as const, value: parsed.value, raw, repaired: false };
+      },
+    });
+    expect(interpreted).toMatchObject({
+      ok: true,
+      source: "runtime",
+      spec: { action: "polish", applyMode: "answer-only" },
+    });
+    expect(structuredCalled).toBe(false);
   });
 
   it("keeps explicit review and advice actions answer-only", async () => {

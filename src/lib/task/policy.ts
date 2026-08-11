@@ -4,6 +4,7 @@ import type {
   SuccessfulInterpretedTask,
   TaskAction,
   TaskApplyMode,
+  TaskContextSlot,
   TaskContentMode,
   TaskScope,
   TaskSpec,
@@ -95,6 +96,42 @@ function namedSlot(text: string): ManuscriptSlotKind | undefined {
   return SLOT_PATTERNS.find(([, pattern]) => pattern.test(text))?.[0];
 }
 
+function mentionedSlots(text: string): Array<{ slot: ManuscriptSlotKind; index: number }> {
+  const found: Array<{ slot: ManuscriptSlotKind; index: number }> = [];
+  for (const [slot, pattern] of SLOT_PATTERNS) {
+    const index = text.search(pattern);
+    if (index >= 0) found.push({ slot, index });
+  }
+  return found.sort((a, b) => a.index - b.index);
+}
+
+function uniqueSlotsInOrder(
+  slots: Array<{ slot: ManuscriptSlotKind; index: number }>,
+): ManuscriptSlotKind[] {
+  const seen = new Set<ManuscriptSlotKind>();
+  const ordered: ManuscriptSlotKind[] = [];
+  for (const { slot } of slots) {
+    if (seen.has(slot)) continue;
+    seen.add(slot);
+    ordered.push(slot);
+  }
+  return ordered;
+}
+
+function basedOnContextTarget(text: string): {
+  target: ManuscriptSlotKind;
+  contextSlots: TaskContextSlot[];
+} | null {
+  if (!/(?:基于|根据|依据|参考|围绕|结合|based\s+on|according\s+to|using|from)/i.test(text)) return null;
+  if (!/(?:写|撰写|起草|生成|补充|扩写|续写|draft|write|compose|generate|expand|continue)/i.test(text)) return null;
+  const slots = uniqueSlotsInOrder(mentionedSlots(text));
+  if (slots.length < 2) return null;
+  const target = slots[slots.length - 1]!;
+  const contextSlots = slots.slice(0, -1).filter((slot) => slot !== target).map((slot) => ({ slot }));
+  if (contextSlots.length === 0) return null;
+  return { target, contextSlots };
+}
+
 function answerAction(text: string, lockedAction?: TaskAction): TaskAction {
   if (lockedAction && isAnswerOnlyAction(lockedAction)) return lockedAction;
   if (/(?:润色|改写|重写|翻译|polish|rewrite|rephrase|translate)/i.test(text)) return "polish";
@@ -131,6 +168,78 @@ function patchAction(text: string, lockedAction?: TaskAction): TaskAction {
 
 function targetFor(slot: ManuscriptSlotKind, sourceIds: string[] = []): TaskTarget {
   return { slot, sourceIds };
+}
+
+function isHighConfidenceDraftRequest(text: string): boolean {
+  return /(?:帮我|请|please)?\s*(?:写|撰写|起草|生成|补充|扩写|续写|完善|draft|write|compose|generate|expand|continue|complete)/i.test(text);
+}
+
+function isLatexCleanupRequest(text: string): boolean {
+  return /(?:修正|修复|清理|去掉|删除|纯文本|编译|格式|markdown|latex|LaTeX|code\s*fence|\*\*)/i.test(text) &&
+    /(?:latex|LaTeX|编译|格式|markdown|\*\*|纯文本|source|tex\b)/i.test(text);
+}
+
+/**
+ * A high-confidence safety net for fuzzy requests when a provider cannot
+ * produce valid TaskSpec JSON. This is deliberately narrower than the LLM
+ * classifier: it only covers deterministic manuscript-writing speech acts
+ * with a runtime-resolvable semantic target.
+ */
+export function runtimeHighConfidenceFallbackTask(args: {
+  userText: string;
+  sources: ConversationArtifact[];
+  selectionAvailable: boolean;
+  policy: RuntimeTaskPolicy;
+  repaired?: boolean;
+}): SuccessfulInterpretedTask | null {
+  if (!args.policy.allowLlmApplyMode) return null;
+  if (requestsExploration(args.userText) || requestsFileCommit(args.userText)) return null;
+
+  const based = basedOnContextTarget(args.userText);
+  if (based) {
+    const spec: TaskSpec = {
+      schemaVersion: "2",
+      action: "draft",
+      applyMode: "propose-patch",
+      contentMode: "generate",
+      scope: "targets",
+      evidenceMode: "none",
+      targets: [targetFor(based.target)],
+      contextSlots: based.contextSlots,
+    };
+    return { ok: true, spec, sources: args.sources, source: "runtime", repaired: args.repaired ?? true };
+  }
+
+  const slot = namedSlot(args.userText);
+  if (slot && isHighConfidenceDraftRequest(args.userText)) {
+    const spec: TaskSpec = {
+      schemaVersion: "2",
+      action: "draft",
+      applyMode: "propose-patch",
+      contentMode: "generate",
+      scope: "targets",
+      evidenceMode: "none",
+      targets: [targetFor(slot)],
+      contextSlots: [],
+    };
+    return { ok: true, spec, sources: args.sources, source: "runtime", repaired: args.repaired ?? true };
+  }
+
+  if (slot && isLatexCleanupRequest(args.userText)) {
+    const spec: TaskSpec = {
+      schemaVersion: "2",
+      action: "latex",
+      applyMode: "propose-patch",
+      contentMode: "none",
+      scope: "targets",
+      evidenceMode: "none",
+      targets: [targetFor(slot)],
+      contextSlots: [],
+    };
+    return { ok: true, spec, sources: args.sources, source: "runtime", repaired: args.repaired ?? true };
+  }
+
+  return null;
 }
 
 /**

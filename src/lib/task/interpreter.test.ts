@@ -128,8 +128,10 @@ describe("TaskSpec v2 interpreter", () => {
         expect(payload.permissionReason).toBe("fuzzy-llm");
         expect(payload.requestDecisionList.some((item: { id: string }) => item.id === "latex-cleanup-or-repair")).toBe(true);
         expect(payload.basePolicyMarkdown).toContain("Assisted writing TaskSpec policy");
+        expect(payload.dynamicJsonTemplate.schemaVersion).toBe("2");
         expect(args.messages[0]?.content).toContain("Request decision list");
         expect(args.messages[0]?.content).toContain("Base policy markdown");
+        expect(args.repairInstruction).toContain("Use this dynamic JSON template");
         const raw = JSON.stringify({
           schemaVersion: "2",
           action: "latex",
@@ -152,6 +154,70 @@ describe("TaskSpec v2 interpreter", () => {
         action: "latex",
         applyMode: "propose-patch",
         targets: [{ slot: "introduction", sourceIds: [] }],
+      },
+    });
+  });
+
+  it("provides an exact dynamic template for based-on-context drafting", async () => {
+    const userText = "基于标题写一个引言";
+    const sources = buildConversationArtifacts({ messageId: "u1", role: "user", content: userText });
+    const interpreted = await interpretTaskSpec({
+      config: { mode: "mock" },
+      userText,
+      history: [],
+      model: await model(),
+      sources,
+      complete: async <T>(args: Parameters<typeof completeStructured<T>>[0]) => {
+        const payload = JSON.parse(args.messages.at(-1)?.content ?? "{}");
+        expect(payload.dynamicJsonTemplate).toMatchObject({
+          schemaVersion: "2",
+          action: "draft",
+          applyMode: "propose-patch",
+          contentMode: "generate",
+          scope: "targets",
+          evidenceMode: "none",
+          targets: [{ slot: "introduction", sourceIds: [] }],
+          contextSlots: [{ slot: "title" }],
+        });
+        expect(args.repairInstruction).toContain('"contextSlots":[{"slot":"title"}]');
+        const raw = JSON.stringify(payload.dynamicJsonTemplate);
+        const parsed = args.parse(raw);
+        if (!parsed.ok) return { ok: false as const, message: parsed.message, raw };
+        return { ok: true as const, value: parsed.value as T, raw, repaired: false };
+      },
+    });
+    expect(interpreted).toMatchObject({
+      ok: true,
+      source: "llm",
+      spec: {
+        action: "draft",
+        applyMode: "propose-patch",
+        targets: [{ slot: "introduction", sourceIds: [] }],
+        contextSlots: [{ slot: "title" }],
+      },
+    });
+  });
+
+  it("uses a high-confidence runtime fallback when fuzzy TaskSpec JSON fails", async () => {
+    const userText = "基于标题写一个引言";
+    const sources = buildConversationArtifacts({ messageId: "u1", role: "user", content: userText });
+    const interpreted = await interpretTaskSpec({
+      config: { mode: "mock" },
+      userText,
+      history: [],
+      model: await model(),
+      sources,
+      complete: async () => ({ ok: false, message: "invalid after repair", raw: "plain text" }),
+    });
+    expect(interpreted).toMatchObject({
+      ok: true,
+      source: "runtime",
+      repaired: true,
+      spec: {
+        action: "draft",
+        applyMode: "propose-patch",
+        targets: [{ slot: "introduction", sourceIds: [] }],
+        contextSlots: [{ slot: "title" }],
       },
     });
   });
@@ -193,7 +259,7 @@ describe("TaskSpec v2 interpreter", () => {
     });
   });
 
-  it("blocks assisted-writing classification failures instead of silently turning them into chat", async () => {
+  it("falls back to a high-confidence assisted-writing transaction when classification fails", async () => {
     const userText = "请帮我补充讨论部分";
     const sources = buildConversationArtifacts({ messageId: "u1", role: "user", content: userText });
     const interpreted = await interpretTaskSpec({
@@ -204,7 +270,15 @@ describe("TaskSpec v2 interpreter", () => {
       sources,
       complete: async () => ({ ok: false, message: "invalid after repair", raw: "plain text" }),
     });
-    expect(interpreted).toMatchObject({ ok: false, source: "invalid", error: "invalid after repair" });
+    expect(interpreted).toMatchObject({
+      ok: true,
+      source: "runtime",
+      spec: {
+        action: "draft",
+        applyMode: "propose-patch",
+        targets: [{ slot: "discussion", sourceIds: [] }],
+      },
+    });
   });
 
   it("keeps an unresolvable mutation blocked after malformed structured output", async () => {

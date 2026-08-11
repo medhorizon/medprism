@@ -156,6 +156,15 @@ Text.
     expect(result.suggestions).toEqual([]);
   });
 
+  it("uses runtime high-confidence fallback for based-on-title introduction drafting when TaskSpec JSON fails", async () => {
+    const user = withConversationArtifacts({ id: "u-intro", role: "user", content: "基于标题写一个引言" });
+    const result = await runAssistant(request(user.content, [user]));
+    expect(result.outcome).toBe("confirmation-required");
+    expect(result.execution).toMatchObject({ taskSource: "runtime", action: "draft" });
+    expect(result.confirmation?.targets[0]?.slot).toBe("Introduction");
+    expect(result.suggestions).toEqual([]);
+  });
+
   it("asks for confirmation, then creates a canonical title PatchSet without reinterpreting", async () => {
     const user = withConversationArtifacts({
       id: "u3",

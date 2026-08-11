@@ -10,6 +10,7 @@ import type { ManuscriptModel } from "../manuscript/types";
 import { manuscriptInventory } from "../manuscript/model";
 import { parseTaskSpec } from "./schema";
 import {
+  runtimeHighConfidenceFallbackTask,
   runtimeFallbackTask,
   runtimeTaskPolicy,
 } from "./policy";
@@ -122,6 +123,29 @@ Return JSON only.`;
 
 export { requestsExploration, requestsFileCommit, requestsWritingAssistance } from "./policy";
 
+function fallbackTaskSpecTemplate(args: {
+  userText: string;
+  sources: ConversationArtifact[];
+  selectionAvailable: boolean;
+  policy: ReturnType<typeof runtimeTaskPolicy>;
+  lockedAction?: TaskAction;
+}): TaskSpec {
+  const highConfidence = runtimeHighConfidenceFallbackTask(args);
+  if (highConfidence?.ok) return highConfidence.spec;
+  const runtimeFallback = runtimeFallbackTask(args);
+  if (runtimeFallback?.ok) return runtimeFallback.spec;
+  return {
+    schemaVersion: "2",
+    action: "advice",
+    applyMode: "answer-only",
+    contentMode: "none",
+    scope: args.selectionAvailable ? "selection" : "manuscript",
+    evidenceMode: "none",
+    targets: [],
+    contextSlots: [],
+  };
+}
+
 function slashAction(text: string): TaskAction | undefined {
   const command = text.trim().match(/^\/(ask|advice|write|draft|polish|cite|review|research|latex|compile-fix)\b/i)?.[1]?.toLowerCase();
   const map: Record<string, TaskAction> = {
@@ -157,6 +181,13 @@ export async function interpretTaskSpec(args: {
     userText: args.userText,
     ...(args.lockedAction ? { lockedAction: args.lockedAction } : {}),
   });
+  const dynamicJsonTemplate = fallbackTaskSpecTemplate({
+    userText: args.userText,
+    sources,
+    selectionAvailable: args.selectionAvailable === true,
+    policy,
+    ...(args.lockedAction ? { lockedAction: args.lockedAction } : {}),
+  });
   if (policy.applyMode === "answer-only" && !policy.allowLlmApplyMode) {
     // Pure conversation must not depend on provider-specific JSON compliance.
     // The downstream answer workflow still receives manuscript context and may stream normally.
@@ -182,6 +213,7 @@ export async function interpretTaskSpec(args: {
         permissionReason: policy.reason,
         requestDecisionList: REQUEST_DECISION_LIST,
         basePolicyMarkdown: policy.allowLlmApplyMode ? assistedWritingPolicy : undefined,
+        dynamicJsonTemplate,
         currentUserText: args.userText,
         uiSelectionAvailable: args.selectionAvailable === true,
         sourceArtifacts: sources.map(({ id, messageId, role, kind, text }) => ({ id, messageId, role, kind, text })),
@@ -206,6 +238,7 @@ export async function interpretTaskSpec(args: {
       }),
       repairInstruction: [
         "Return only a valid TaskSpec schemaVersion 2 JSON object.",
+        `Use this dynamic JSON template when it matches the current request: ${JSON.stringify(dynamicJsonTemplate)}.`,
         `action is${args.lockedAction ? ` locked to ${args.lockedAction}` : " selected from the documented enum"}.`,
         policy.allowLlmApplyMode
           ? "applyMode must be either answer-only or propose-patch according to the assisted-writing policy."
@@ -217,6 +250,14 @@ export async function interpretTaskSpec(args: {
     });
   } catch (error) {
     if (policy.allowLlmApplyMode) {
+      const fallback = runtimeHighConfidenceFallbackTask({
+        userText: args.userText,
+        sources,
+        selectionAvailable: args.selectionAvailable === true,
+        policy,
+        repaired: true,
+      });
+      if (fallback) return fallback;
       return {
         ok: false,
         sources,
@@ -243,6 +284,14 @@ export async function interpretTaskSpec(args: {
   }
   if (!result.ok) {
     if (policy.allowLlmApplyMode) {
+      const fallback = runtimeHighConfidenceFallbackTask({
+        userText: args.userText,
+        sources,
+        selectionAvailable: args.selectionAvailable === true,
+        policy,
+        repaired: true,
+      });
+      if (fallback) return fallback;
       return {
         ok: false,
         sources,

@@ -35,6 +35,7 @@ function services(args: {
   modelResponses?: string[];
   toolResult?: ToolResult;
   onModel?: (system: string) => void;
+  onMessages?: (messages: Array<{ role: string; content: string }>) => void;
   onTool?: (name: string) => void;
 } = {}): WorkflowServices {
   const responses = [...(args.modelResponses ?? [])];
@@ -42,6 +43,7 @@ function services(args: {
     complete: vi.fn(async ({ messages }: { messages: Array<{ role: string; content: string }> }) => {
       const system = messages.find((message: { role: string }) => message.role === "system")?.content ?? "";
       args.onModel?.(system);
+      args.onMessages?.(messages);
       const response = responses.shift();
       if (response === undefined) throw new Error("Unexpected model call");
       return response;
@@ -85,6 +87,13 @@ function targetedDraft(text: string, workflow: "writing" | "polish" = "writing",
       sourceCandidateIds: [trustedHit.id],
     },
   });
+}
+
+function taggedJson(messages: Array<{ role: string; content: string }>, tag: string): any {
+  const content = messages.find((message) => message.content.includes(`<${tag}`))?.content ?? "";
+  const match = content.match(new RegExp(`<${tag}[^>]*>\\n([\\s\\S]*?)\\n</${tag}>`));
+  if (!match) throw new Error(`Missing tagged payload ${tag}`);
+  return JSON.parse(match[1]!);
 }
 
 function unresearchedTargetedDraft(text: string, workflow: "writing" | "polish" = "polish") {
@@ -178,6 +187,132 @@ describe("workflow executor", () => {
         repaired: false,
       },
     });
+    let modelMessages: Array<{ role: string; content: string }> = [];
+    const result = await executeWorkflow({
+      request: {
+        kind: "writing",
+        userText: "起草伦理声明",
+        resolvedTask,
+        plan: { primary: "writing", steps: ["writing", "latex-apply"], applyToLatex: true },
+      },
+      config,
+      history: [],
+      ctx,
+    }, services({
+      modelResponses: [JSON.stringify({
+        schemaVersion: "1",
+        workflow: "writing",
+        summary: "Draft ethics statement",
+        warnings: [],
+        textDraft: {
+          text: "The study was approved by the institutional ethics committee.",
+          format: "plain-text",
+          sourceCandidateIds: [],
+        },
+      })],
+      onMessages: (messages) => { modelMessages = messages; },
+    }));
+    expect(result.agent.patch).toBeDefined();
+    const workspace = taggedJson(modelMessages, "workspace_context");
+    expect(workspace.textTarget.slotTemplate).toMatchObject({
+      profile: "generic",
+      semanticSlot: "ethics",
+      bodyContract: "slot-body-only",
+      wrapperOwnedByRuntime: true,
+    });
+    expect(workspace.textTarget.slotTemplate.wrapperPreview).toContain("\\section*{Ethics approval and consent to participate}");
+    expect(workspace.textTarget.slotTemplate.rules.join(" ")).toContain("declaration statement body only");
+    const simulated = await simulatePatchSet({ "main.tex": source }, result.agent.patch!);
+    expect(simulated.ok).toBe(true);
+    if (simulated.ok) {
+      expect(simulated.simulation.nextFiles["main.tex"]).toContain(
+        "\\section*{Ethics approval and consent to participate}",
+      );
+    }
+  });
+
+  it("rejects slot drafts that return LaTeX wrappers instead of template body text", async () => {
+    const source = "\\documentclass{article}\n\\begin{document}\n\\section{Introduction}\nText.\n\\end{document}";
+    const ctx = context({ source });
+    const snapshot = await buildContextSnapshot(ctx);
+    const resolvedTask = resolveTaskContext({
+      snapshot,
+      model: buildManuscriptModel(snapshot),
+      interpreted: {
+        ok: true,
+        spec: {
+          schemaVersion: "2",
+          action: "draft",
+          applyMode: "propose-patch",
+          contentMode: "generate",
+          scope: "targets",
+          evidenceMode: "none",
+          targets: [{ slot: "ethics", sourceIds: [] }],
+        },
+        sources: [],
+        source: "llm",
+        repaired: false,
+      },
+    });
+    const result = await executeWorkflow({
+      request: {
+        kind: "writing",
+        userText: "起草伦理声明",
+        resolvedTask,
+        plan: { primary: "writing", steps: ["writing", "latex-apply"], applyToLatex: true },
+      },
+      config,
+      history: [],
+      ctx,
+    }, services({
+      modelResponses: [JSON.stringify({
+        schemaVersion: "1",
+        workflow: "writing",
+        summary: "Draft ethics statement",
+        warnings: [],
+        textDraft: {
+          text: "\\section*{Ethics approval and consent to participate}\nThe study was approved.",
+          format: "latex-body",
+          sourceCandidateIds: [],
+        },
+      })],
+    }));
+    expect(result.agent.patch).toBeUndefined();
+    expect(result.agent.warnings.join(" ")).toContain("slot body only");
+  });
+
+  it("renders generated missing slots through the active template profile", async () => {
+    const source = [
+      "\\documentclass{sn-jnl}",
+      "\\begin{document}",
+      "\\bmhead{Declarations}",
+      "\\begin{itemize}",
+      "\\item Funding: No external funding was received.",
+      "\\end{itemize}",
+      "\\bibliography{sn-bibliography}",
+      "\\end{document}",
+    ].join("\n");
+    const ctx = context({ source });
+    const snapshot = await buildContextSnapshot(ctx);
+    const resolvedTask = resolveTaskContext({
+      snapshot,
+      model: buildManuscriptModel(snapshot),
+      interpreted: {
+        ok: true,
+        spec: {
+          schemaVersion: "2",
+          action: "draft",
+          applyMode: "propose-patch",
+          contentMode: "generate",
+          scope: "targets",
+          evidenceMode: "none",
+          targets: [{ slot: "ethics", sourceIds: [] }],
+        },
+        sources: [],
+        source: "llm",
+        repaired: false,
+      },
+    });
     const result = await executeWorkflow({
       request: {
         kind: "writing",
@@ -205,9 +340,9 @@ describe("workflow executor", () => {
     const simulated = await simulatePatchSet({ "main.tex": source }, result.agent.patch!);
     expect(simulated.ok).toBe(true);
     if (simulated.ok) {
-      expect(simulated.simulation.nextFiles["main.tex"]).toContain(
-        "\\section*{Ethics approval and consent to participate}",
-      );
+      const next = simulated.simulation.nextFiles["main.tex"] ?? "";
+      expect(next).toContain("\\item Ethics approval and consent to participate: The study was approved by the institutional ethics committee.");
+      expect(next).not.toContain("\\bmhead{Ethics approval and consent to participate}");
     }
   });
 

@@ -532,6 +532,10 @@ function renderInsertedBlock(
   target: ResolvedLatexTarget,
   renderedText: string,
 ): string {
+  const template = target.slotTemplate?.wrapperPreview;
+  if (template?.includes("<slot-body>")) {
+    return `${template.replaceAll("<slot-body>", renderedText).trimEnd()}\n\n`;
+  }
   if (target.kind === "abstract") {
     return target.syntax === "command"
       ? `\\abstract{${renderedText}}\n\n`

@@ -23,6 +23,9 @@ The runtime may require `workflow: "polish"` instead. Match the active workflow 
 
 Rules:
 
+- Treat `workspace_context.textTarget.slotTemplate` as authoritative template guidance.
+- Use `slotTemplate.semanticSlot`, `slotTemplate.profile`, `slotTemplate.wrapperPreview`, and `slotTemplate.rules` to make the content fit the active journal template.
+- Return `textDraft.text` as slot body content only. The runtime will add or preserve the LaTeX wrapper shown in `slotTemplate.wrapperPreview`.
 - Return only the target body, not the heading, `\section`, `\abstract`, environment wrapper, or whole file.
 - Follow the runtime-provided `preferredFormat`.
 - Use `plain-text` for ordinary prose when no LaTeX syntax must be preserved.

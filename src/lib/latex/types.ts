@@ -1,4 +1,5 @@
 import type { SourceRange } from "../patch/schema";
+import type { TemplateProfileId } from "../manuscript/types";
 
 export type LatexTargetKind =
   | "selection"
@@ -33,6 +34,21 @@ export type LatexTargetSpec = {
 /** Plain prose is escaped by runtime; latex-body is preserved after validation. */
 export type LatexDraftFormat = "plain-text" | "latex-body";
 
+export type LatexSlotTemplateSpec = {
+  schemaVersion: "1";
+  profile: TemplateProfileId;
+  semanticSlot: string;
+  targetKind: LatexTargetKind;
+  heading: string | null;
+  targetSyntax: "command" | "environment" | "section" | "selection" | "body";
+  operation: "replace_body" | "insert_before" | "insert_after";
+  bodyContract: "slot-body-only";
+  preferredFormat: LatexDraftFormat;
+  wrapperOwnedByRuntime: true;
+  wrapperPreview: string;
+  rules: string[];
+};
+
 export type ResolvedLatexTarget = {
   kind: LatexTargetKind;
   path: string;
@@ -49,4 +65,5 @@ export type ResolvedLatexTarget = {
   /** Optional short-argument text from `\command[short]{body}`. */
   optionalArg?: string;
   optionalArgRange?: SourceRange;
+  slotTemplate?: LatexSlotTemplateSpec;
 };

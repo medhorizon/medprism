@@ -1,5 +1,10 @@
 import targetedTextInstruction from "../../../prompts/workflows/targeted-text.md?raw";
 import type { ContextSnapshot } from "../context/snapshot";
+import {
+  buildFallbackLatexSlotTemplateSpec,
+  preferredDraftFormatForTarget,
+  validateSlotBodyDraft,
+} from "../latex/slotTemplates";
 import { resolveLatexTarget } from "../latex/textTargets";
 import type { LatexTargetSpec } from "../latex/types";
 import type { ResolvedLatexTarget } from "../latex/types";
@@ -146,6 +151,8 @@ export async function runTargetedTextWorkflow(args: {
       : { ok: false as const, message: "Resolved semantic text target is missing" };
   if (!targetResult.ok) return invalidTargetedTextResult(workflow, targetResult.message);
   const target = targetResult.target;
+  const preferredFormat = preferredDraftFormatForTarget(target);
+  const slotTemplate = target.slotTemplate ?? buildFallbackLatexSlotTemplateSpec(snapshot.files, target);
   const hasResearch = Boolean(input.research);
 
   const messages = [
@@ -176,10 +183,8 @@ export async function runTargetedTextWorkflow(args: {
             heading: target.heading ?? null,
             existingText: target.existingText.slice(0, 12_000),
             sourceContext: target.sourceContext.slice(0, 16_000),
-            preferredFormat:
-              /\\[A-Za-z@]+|\$|\\\(|\\\[/.test(target.existingText)
-                ? "latex-body"
-                : "plain-text",
+            preferredFormat,
+            slotTemplate,
           },
         },
       ),
@@ -247,6 +252,8 @@ export async function runTargetedTextWorkflow(args: {
     ...(input.research ? { research: input.research } : {}),
   });
   if (!draftResult.ok) return invalidTargetedTextResult(workflow, draftResult.message);
+  const bodyOnly = validateSlotBodyDraft(target, draftResult.draft.text);
+  if (!bodyOnly.ok) return invalidTargetedTextResult(workflow, bodyOnly.message);
 
   if (workflow === "polish" && target.existingText) {
     const protectedResult = validateProtectedTextReplacement(

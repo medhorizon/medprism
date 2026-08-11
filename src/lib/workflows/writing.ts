@@ -10,6 +10,7 @@ import {
 } from "../context/snapshot";
 import type { ResolvedTask } from "../context/resolver";
 import type { ResolvedLatexTarget } from "../latex/types";
+import { buildLatexSlotTemplateSpec } from "../latex/slotTemplates";
 import { displayHeading } from "../manuscript/slots";
 import { taggedPromptData } from "../promptData";
 import { compactPaperHits, validateResearchUse } from "../research/service";
@@ -48,16 +49,23 @@ function resolvedTextTarget(
   resolved: ResolvedTask,
 ): { ok: true; target: ResolvedLatexTarget } | { ok: false; message: string } {
   if (resolved.selection) {
+    const target: ResolvedLatexTarget = {
+      kind: "selection",
+      path: resolved.selection.path,
+      mode: "replace_body",
+      syntax: "selection",
+      existingText: resolved.selection.text,
+      sourceContext: snapshot.localContext,
+      range: resolved.selection.range,
+    };
     return {
       ok: true,
       target: {
-        kind: "selection",
-        path: resolved.selection.path,
-        mode: "replace_body",
-        syntax: "selection",
-        existingText: resolved.selection.text,
-        sourceContext: snapshot.localContext,
-        range: resolved.selection.range,
+        ...target,
+        slotTemplate: buildLatexSlotTemplateSpec({
+          profile: resolved.model.profile,
+          target,
+        }),
       },
     };
   }
@@ -70,18 +78,26 @@ function resolvedTextTarget(
     const occurrence = binding.occurrence;
     const source = snapshot.files[occurrence.path] ?? "";
     const center = occurrence.wrapperRange.start;
+    const target: ResolvedLatexTarget = {
+      kind,
+      path: occurrence.path,
+      mode: "replace_body",
+      syntax: occurrence.syntax === "declaration-item" ? "section" : occurrence.syntax,
+      existingText: occurrence.body,
+      sourceContext: source.slice(Math.max(0, center - 1000), Math.min(source.length, occurrence.wrapperRange.end + 1000)),
+      range: occurrence.bodyRange,
+      heading: occurrence.heading,
+      ...(kind === "title" || kind === "keywords" ? { commandName: kind } : {}),
+    };
     return {
       ok: true,
       target: {
-        kind,
-        path: occurrence.path,
-        mode: "replace_body",
-        syntax: occurrence.syntax === "declaration-item" ? "section" : occurrence.syntax,
-        existingText: occurrence.body,
-        sourceContext: source.slice(Math.max(0, center - 1000), Math.min(source.length, occurrence.wrapperRange.end + 1000)),
-        range: occurrence.bodyRange,
-        heading: occurrence.heading,
-        ...(kind === "title" || kind === "keywords" ? { commandName: kind } : {}),
+        ...target,
+        slotTemplate: buildLatexSlotTemplateSpec({
+          profile: resolved.model.profile,
+          ref: binding.ref,
+          target,
+        }),
       },
     };
   }
@@ -92,19 +108,27 @@ function resolvedTextTarget(
       return { ok: false, message: "The semantic insertion point is no longer available." };
     }
     const end = Math.min(source.length, insertion.at + 120);
+    const target: ResolvedLatexTarget = {
+      kind,
+      path: insertion.path,
+      mode: "insert_before",
+      syntax: insertion.syntax === "declaration-item" ? "section" : insertion.syntax,
+      existingText: "",
+      sourceContext: source.slice(Math.max(0, insertion.at - 1000), Math.min(source.length, end + 1000)),
+      range: { start: insertion.at, end },
+      anchor: source.slice(insertion.at, end),
+      heading: displayHeading(binding.ref),
+      ...(kind === "title" || kind === "keywords" ? { commandName: kind } : {}),
+    };
     return {
       ok: true,
       target: {
-        kind,
-        path: insertion.path,
-        mode: "insert_before",
-        syntax: insertion.syntax === "declaration-item" ? "section" : insertion.syntax,
-        existingText: "",
-        sourceContext: source.slice(Math.max(0, insertion.at - 1000), Math.min(source.length, end + 1000)),
-        range: { start: insertion.at, end },
-        anchor: source.slice(insertion.at, end),
-        heading: displayHeading(binding.ref),
-        ...(kind === "title" || kind === "keywords" ? { commandName: kind } : {}),
+        ...target,
+        slotTemplate: buildLatexSlotTemplateSpec({
+          profile: resolved.model.profile,
+          ref: binding.ref,
+          target,
+        }),
       },
     };
   }

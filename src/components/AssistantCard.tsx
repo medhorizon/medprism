@@ -21,6 +21,8 @@ type AssistantCardProps = {
   quickPrompts: string[];
   onKeep: (message: ChatMessage) => void;
   onUndo: (message: ChatMessage) => void;
+  onConfirm: (message: ChatMessage) => void;
+  onCancelConfirmation: (message: ChatMessage) => void;
   sending?: boolean;
   memoryNotes?: string;
   onMemoryNotesChange?: (notes: string) => void;
@@ -121,6 +123,7 @@ export function AssistantCard(props: AssistantCardProps) {
           <div className="ai-thread">
             {props.chat.map((message) => {
               const suggestion = message.suggestion;
+              const confirmation = message.confirmation;
               const status = suggestion?.status ?? "pending";
               const kept = status === "applied";
               const dismissed = status === "dismissed";
@@ -130,6 +133,22 @@ export function AssistantCard(props: AssistantCardProps) {
                 <div key={message.id} className={`msg ${message.role}`}>
                   <div className="msg-role">{message.role === "assistant" ? "MedPrism" : t("assistant.you")}</div>
                   <div className="msg-bubble">{message.content}</div>
+                  {confirmation && confirmation.status !== "superseded" && (
+                    <div className={`suggestion ${confirmation.status === "confirmed" ? "is-kept" : ""}`}>
+                      <div className="suggestion-head">{t("assistant.confirmTitle")}</div>
+                      <div className="suggestion-body">
+                        {confirmation.task.targets.map((target) => `${target.slot}${target.path ? ` · ${target.path}` : ""}`).join("\n") || t("assistant.confirmSelection")}
+                      </div>
+                      {confirmation.status === "awaiting-confirmation" ? (
+                        <div className="suggestion-actions">
+                          <button className="btn btn-primary" type="button" onClick={() => props.onConfirm(message)}>{t("assistant.confirmContinue")}</button>
+                          <button className="btn btn-secondary" type="button" onClick={() => props.onCancelConfirmation(message)}>{t("common.cancel")}</button>
+                        </div>
+                      ) : (
+                        <div className="suggestion-body">{confirmation.status === "confirmed" ? t("assistant.confirmed") : t("assistant.confirmCancelled")}</div>
+                      )}
+                    </div>
+                  )}
                   {suggestion && !dismissed && (
                     <div className={`suggestion ${kept ? "is-kept" : ""}`}>
                       <div className="suggestion-head">{suggestion.title}</div>

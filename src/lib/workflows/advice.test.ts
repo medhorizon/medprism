@@ -16,7 +16,7 @@ describe("semantic advice workflow", () => {
       model,
       interpreted: {
         spec: {
-          schemaVersion: "1",
+          schemaVersion: "2",
           action: "advice",
           applyMode: "answer-only",
           contentMode: "none",
@@ -24,7 +24,8 @@ describe("semantic advice workflow", () => {
           evidenceMode: "none",
           targets: [],
         },
-        segments: [],
+        ok: true,
+        sources: [],
         source: "llm",
         repaired: false,
       },
@@ -60,8 +61,9 @@ describe("semantic advice workflow", () => {
       snapshot,
       model,
       interpreted: {
-        spec: { schemaVersion: "1", action: "advice", applyMode: "answer-only", contentMode: "none", scope: "active-file", evidenceMode: "none", targets: [] },
-        segments: [],
+        spec: { schemaVersion: "2", action: "advice", applyMode: "answer-only", contentMode: "none", scope: "active-file", evidenceMode: "none", targets: [] },
+        ok: true,
+        sources: [],
         source: "llm",
         repaired: false,
       },

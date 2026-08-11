@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatMessage } from "../types/chat";
+import { buildConversationArtifacts } from "../lib/conversationArtifacts";
 import { runAssistant } from "../lib/assistantRuntime";
 import {
   adoptProjectChat,
@@ -13,6 +14,47 @@ import {
 } from "./projectChatSession";
 
 const storage = new Map<string, string>();
+
+function pendingConfirmation(): ChatMessage {
+  const sources = buildConversationArtifacts({ messageId: "u-edit", role: "user", content: "修改标题为New Title" });
+  const source = sources.find((artifact) => artifact.kind === "assignment-value")!;
+  const task = {
+    schemaVersion: "1" as const,
+    id: "task-1",
+    projectId: "a",
+    projectRevision: "revision-1",
+    createdAt: new Date().toISOString(),
+    status: "awaiting-confirmation" as const,
+    spec: {
+      schemaVersion: "2" as const,
+      action: "fill-sections" as const,
+      applyMode: "propose-patch" as const,
+      contentMode: "provided" as const,
+      scope: "targets" as const,
+      evidenceMode: "none" as const,
+      targets: [{ slot: "title" as const, sourceIds: [source.id] }],
+    },
+    sources: [source],
+    targets: [{ id: "title", slot: "Title", operation: "replace" as const, preview: source.text }],
+  };
+  return {
+    id: "a-confirm",
+    role: "assistant",
+    content: "Confirm",
+    confirmation: { task, status: "awaiting-confirmation" },
+  };
+}
+
+function answerResult(content = "done") {
+  return {
+    agent: { schemaVersion: "1" as const, workflow: "advice" as const, summary: "done", warnings: [] },
+    content,
+    suggestions: [],
+    toolNotes: [],
+    outcome: "answer" as const,
+    execution: { schemaVersion: "1" as const, outcome: "answer" as const, taskSource: "locked" as const, action: "advice" as const, targetCount: 0 },
+  };
+}
 
 vi.mock("./projectArtifacts", () => ({
   saveProjectChat: (
@@ -84,6 +126,8 @@ describe("projectChatSession", () => {
         content: "First second",
         suggestions: [],
         toolNotes: [],
+        outcome: "answer",
+        execution: { schemaVersion: "1", outcome: "answer", taskSource: "locked", action: "advice", targetCount: 0 },
       };
     });
     const pending = startProjectAssistant({
@@ -115,5 +159,111 @@ describe("projectChatSession", () => {
     shutdownProjectChats("Interrupted by shutdown");
     expect(storage.get("a")).toContain("Interrupted by shutdown");
     expect(storage.get("a")).not.toContain('"pending":true');
+  });
+
+  it("cancels a pending file task without calling the model", async () => {
+    setSessionChat("a", [pendingConfirmation()]);
+    const completed = await startProjectAssistant({
+      projectId: "a",
+      config: { mode: "mock" },
+      displayUserText: "取消",
+      userText: "取消",
+      history: [],
+      workflow: "auto",
+      confirmationControl: { taskId: "task-1", action: "cancel" },
+      ctx: { projectId: "a", files: { "main.tex": "text" } },
+      thinkingLabel: "Thinking",
+      mapError: String,
+    });
+    expect(completed).toBe(true);
+    expect(runAssistant).not.toHaveBeenCalled();
+    expect(getSessionChat("a")[0]?.confirmation?.status).toBe("cancelled");
+  });
+
+  it("resumes confirmation without reinterpreting and supersedes it on a new request", async () => {
+    vi.mocked(runAssistant).mockResolvedValue(answerResult());
+    setSessionChat("a", [pendingConfirmation()]);
+    await startProjectAssistant({
+      projectId: "a",
+      config: { mode: "mock" },
+      displayUserText: "确认",
+      userText: "确认",
+      history: [],
+      workflow: "auto",
+      confirmationControl: { taskId: "task-1", action: "confirm" },
+      ctx: { projectId: "a", files: { "main.tex": "text" } },
+      thinkingLabel: "Thinking",
+      mapError: String,
+    });
+    expect(vi.mocked(runAssistant).mock.calls[0]?.[0].resumeTask?.id).toBe("task-1");
+    expect(getSessionChat("a")[0]?.confirmation?.status).toBe("confirmed");
+
+    clearSessionChat("a");
+    setSessionChat("a", [pendingConfirmation()]);
+    await startProjectAssistant({
+      projectId: "a",
+      config: { mode: "mock" },
+      displayUserText: "换一个更短的版本",
+      userText: "换一个更短的版本",
+      history: [],
+      workflow: "auto",
+      ctx: { projectId: "a", files: { "main.tex": "text" } },
+      thinkingLabel: "Thinking",
+      mapError: String,
+    });
+    expect(getSessionChat("a")[0]?.confirmation?.status).toBe("superseded");
+  });
+
+  it("ignores a stale confirmation control without changing the current task", async () => {
+    setSessionChat("a", [pendingConfirmation()]);
+    const completed = await startProjectAssistant({
+      projectId: "a",
+      config: { mode: "mock" },
+      displayUserText: "确认",
+      userText: "确认",
+      history: [],
+      workflow: "auto",
+      confirmationControl: { taskId: "older-task", action: "confirm" },
+      ctx: { projectId: "a", files: { "main.tex": "text" } },
+      thinkingLabel: "Thinking",
+      mapError: String,
+    });
+    expect(completed).toBe(false);
+    expect(runAssistant).not.toHaveBeenCalled();
+    expect(getSessionChat("a")[0]?.confirmation?.status).toBe("awaiting-confirmation");
+  });
+
+  it("resumes a pending task from an unqualified natural confirmation", async () => {
+    vi.mocked(runAssistant).mockResolvedValue(answerResult());
+    setSessionChat("a", [pendingConfirmation()]);
+    expect(await startProjectAssistant({
+      projectId: "a",
+      config: { mode: "mock" },
+      displayUserText: "继续",
+      userText: "继续",
+      history: [],
+      workflow: "auto",
+      ctx: { projectId: "a", files: { "main.tex": "text" } },
+      thinkingLabel: "Thinking",
+      mapError: String,
+    })).toBe(true);
+    expect(vi.mocked(runAssistant).mock.calls[0]?.[0].resumeTask?.id).toBe("task-1");
+  });
+
+  it("keeps a confirmed task retryable when execution fails before a PatchSet", async () => {
+    vi.mocked(runAssistant).mockRejectedValue(new Error("transport failed"));
+    setSessionChat("a", [pendingConfirmation()]);
+    expect(await startProjectAssistant({
+      projectId: "a",
+      config: { mode: "mock" },
+      displayUserText: "确认",
+      userText: "确认",
+      history: [],
+      workflow: "auto",
+      ctx: { projectId: "a", files: { "main.tex": "text" } },
+      thinkingLabel: "Thinking",
+      mapError: () => "failed",
+    })).toBe(false);
+    expect(getSessionChat("a")[0]?.confirmation?.status).toBe("awaiting-confirmation");
   });
 });

@@ -1,12 +1,21 @@
-import type { ChatMessage, ChatSuggestion } from "../types/chat";
+import type {
+  ChatConfirmation,
+  ChatExecution,
+  ChatMessage,
+  ChatSuggestion,
+  PendingFileTask,
+  PendingFileTaskStatus,
+} from "../types/chat";
 import { normalizeProjectMemory } from "../lib/projectMemory";
+import { conversationArtifacts, validateConversationArtifact, withConversationArtifacts } from "../lib/conversationArtifacts";
+import { parseTaskSpec } from "../lib/task/schema";
 
 export { MAX_PROJECT_MEMORY_CHARS, normalizeProjectMemory } from "../lib/projectMemory";
 
 const CHAT_PREFIX = "medprism.projectChat.";
 const PDF_PREFIX = "medprism.projectPdf.";
 const MEMORY_PREFIX = "medprism.projectMemory.";
-const CHAT_SCHEMA_VERSION = 1 as const;
+const CHAT_SCHEMA_VERSION = 2 as const;
 const PDF_SCHEMA_VERSION = 1 as const;
 const MEMORY_SCHEMA_VERSION = 1 as const;
 const MAX_CHAT_MESSAGES = 80;
@@ -27,14 +36,14 @@ export function finalizeChatMessages(
     const stale =
       message.role === "assistant" &&
       (message.pending === true || THINKING_PLACEHOLDERS.has(message.content));
-    if (!stale && message.pending === undefined) return message;
+    if (!stale && message.pending === undefined) return withConversationArtifacts(message);
     const next: ChatMessage = {
       id: message.id,
       role: message.role,
       content: stale ? interruptedContent : message.content,
     };
     if (message.suggestion) next.suggestion = message.suggestion;
-    return next;
+    return withConversationArtifacts(next);
   });
 }
 
@@ -81,6 +90,112 @@ function slimSuggestion(suggestion: ChatSuggestion | undefined): ChatSuggestion 
   return { ...suggestion };
 }
 
+const PENDING_STATUSES = new Set<PendingFileTaskStatus>([
+  "awaiting-confirmation", "confirmed", "cancelled", "superseded", "expired",
+]);
+const PENDING_OPERATIONS = new Set<PendingFileTask["targets"][number]["operation"]>([
+  "generate", "replace", "insert", "scaffold", "cite", "repair",
+]);
+const TASK_ACTIONS = new Set([
+  "advice", "draft", "polish", "scaffold", "fill-sections", "cite",
+  "review", "research", "latex", "compile-fix",
+]);
+
+function normalizePendingTargets(value: unknown): PendingFileTask["targets"] | null {
+  if (!Array.isArray(value)) return null;
+  const targets: PendingFileTask["targets"] = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
+    const target = entry as Record<string, unknown>;
+    if (
+      typeof target.id !== "string" || !target.id ||
+      typeof target.slot !== "string" || !target.slot ||
+      !PENDING_OPERATIONS.has(target.operation as PendingFileTask["targets"][number]["operation"]) ||
+      (target.path !== undefined && typeof target.path !== "string") ||
+      (target.preview !== undefined && typeof target.preview !== "string")
+    ) return null;
+    targets.push({
+      id: target.id,
+      slot: target.slot,
+      operation: target.operation as PendingFileTask["targets"][number]["operation"],
+      ...(typeof target.path === "string" ? { path: target.path } : {}),
+      ...(typeof target.preview === "string" ? { preview: target.preview } : {}),
+    });
+  }
+  return targets;
+}
+
+function normalizePendingSelection(value: unknown): PendingFileTask["selection"] | undefined | null {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const selection = value as Record<string, unknown>;
+  if (
+    typeof selection.path !== "string" || !selection.path ||
+    !Number.isSafeInteger(selection.start) || !Number.isSafeInteger(selection.end) ||
+    Number(selection.start) < 0 || Number(selection.end) <= Number(selection.start) ||
+    typeof selection.textHash !== "string" || !/^[0-9a-f]{16}$/.test(selection.textHash)
+  ) return null;
+  return {
+    path: selection.path,
+    start: Number(selection.start),
+    end: Number(selection.end),
+    textHash: selection.textHash,
+  };
+}
+
+function normalizeConfirmation(value: unknown): ChatConfirmation | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  if (!PENDING_STATUSES.has(raw.status as PendingFileTaskStatus)) return undefined;
+  if (!raw.task || typeof raw.task !== "object" || Array.isArray(raw.task)) return undefined;
+  const task = raw.task as Record<string, unknown>;
+  if (
+    task.schemaVersion !== "1" ||
+    typeof task.id !== "string" ||
+    typeof task.projectId !== "string" ||
+    typeof task.projectRevision !== "string" ||
+    typeof task.createdAt !== "string" ||
+    !PENDING_STATUSES.has(task.status as PendingFileTaskStatus) ||
+    !Array.isArray(task.sources) ||
+    !Array.isArray(task.targets)
+  ) return undefined;
+  if (raw.status !== task.status) return undefined;
+  const sources = task.sources.filter(validateConversationArtifact);
+  if (sources.length !== task.sources.length) return undefined;
+  const parsed = parseTaskSpec(JSON.stringify(task.spec), sources.map((source) => source.id));
+  if (!parsed.ok) return undefined;
+  const targets = normalizePendingTargets(task.targets);
+  const selection = normalizePendingSelection(task.selection);
+  if (!targets || selection === null) return undefined;
+  const normalizedTask: PendingFileTask = {
+    schemaVersion: "1",
+    id: task.id,
+    projectId: task.projectId,
+    projectRevision: task.projectRevision,
+    createdAt: task.createdAt,
+    status: task.status as PendingFileTaskStatus,
+    spec: parsed.value,
+    sources,
+    targets,
+    ...(selection ? { selection } : {}),
+  };
+  return { task: normalizedTask, status: raw.status as PendingFileTaskStatus };
+}
+
+function normalizeExecution(value: unknown): ChatExecution | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const raw = value as Record<string, unknown>;
+  if (
+    raw.schemaVersion !== "1" ||
+    !["answer", "confirmation-required", "patch-proposed", "blocked"].includes(String(raw.outcome)) ||
+    !["llm", "locked", "invalid", "resumed"].includes(String(raw.taskSource)) ||
+    !Number.isSafeInteger(raw.targetCount) || Number(raw.targetCount) < 0 ||
+    (raw.action !== undefined && !TASK_ACTIONS.has(String(raw.action))) ||
+    (raw.failureCode !== undefined && typeof raw.failureCode !== "string")
+  ) return undefined;
+  return value as ChatExecution;
+}
+
 function normalizeMessage(value: unknown): ChatMessage | null {
   if (!value || typeof value !== "object") return null;
   const raw = value as Record<string, unknown>;
@@ -96,7 +211,11 @@ function normalizeMessage(value: unknown): ChatMessage | null {
   if (raw.suggestion && typeof raw.suggestion === "object") {
     message.suggestion = slimSuggestion(raw.suggestion as ChatSuggestion);
   }
-  return message;
+  const confirmation = normalizeConfirmation(raw.confirmation);
+  if (confirmation) message.confirmation = confirmation;
+  const execution = normalizeExecution(raw.execution);
+  if (execution) message.execution = execution;
+  return withConversationArtifacts(message);
 }
 
 function normalizeChat(value: unknown): ChatMessage[] | null {
@@ -109,7 +228,30 @@ function normalizeChat(value: unknown): ChatMessage[] | null {
     if (!message) return null;
     messages.push(message);
   }
-  return messages;
+  const sourceById = new Map(conversationArtifacts(messages).map((artifact) => [artifact.id, artifact]));
+  return messages.map((message) => {
+    const confirmation = message.confirmation;
+    if (!confirmation || confirmation.status !== "awaiting-confirmation") return message;
+    const sourcesStillBound = confirmation.task.sources.every((source) => {
+      const actual = sourceById.get(source.id);
+      return actual !== undefined &&
+        actual.messageId === source.messageId &&
+        actual.role === source.role &&
+        actual.kind === source.kind &&
+        actual.start === source.start &&
+        actual.end === source.end &&
+        actual.text === source.text &&
+        actual.textHash === source.textHash;
+    });
+    if (sourcesStillBound) return message;
+    return {
+      ...message,
+      confirmation: {
+        status: "expired",
+        task: { ...confirmation.task, status: "expired" },
+      },
+    };
+  });
 }
 
 /** Drop the heaviest undo snapshots from oldest assistant messages when quota is tight. */

@@ -2,6 +2,7 @@ import targetedTextInstruction from "../../../prompts/workflows/targeted-text.md
 import type { ContextSnapshot } from "../context/snapshot";
 import { resolveLatexTarget } from "../latex/textTargets";
 import type { LatexTargetSpec } from "../latex/types";
+import type { ResolvedLatexTarget } from "../latex/types";
 import { taggedPromptData } from "../promptData";
 import { compactPaperHits, validateResearchUse } from "../research/service";
 import { parseModelWorkflowEnvelope } from "../replyParse";
@@ -127,9 +128,10 @@ export async function runTargetedTextWorkflow(args: {
   input: WorkflowExecutionInput;
   snapshot: ContextSnapshot;
   skill: WritingSkillSelection;
-  targetSpec: LatexTargetSpec;
+  targetSpec?: LatexTargetSpec;
+  resolvedTarget?: ResolvedLatexTarget;
 }): Promise<WorkflowResult> {
-  const { input, snapshot, skill, targetSpec } = args;
+  const { input, snapshot, skill } = args;
   if (input.request.kind !== "writing" && input.request.kind !== "polish") {
     return invalidTargetedTextResult(
       "writing",
@@ -137,7 +139,11 @@ export async function runTargetedTextWorkflow(args: {
     );
   }
   const workflow = input.request.kind;
-  const targetResult = resolveLatexTarget(snapshot, targetSpec);
+  const targetResult = args.resolvedTarget
+    ? { ok: true as const, target: args.resolvedTarget }
+    : args.targetSpec
+      ? resolveLatexTarget(snapshot, args.targetSpec)
+      : { ok: false as const, message: "Resolved semantic text target is missing" };
   if (!targetResult.ok) return invalidTargetedTextResult(workflow, targetResult.message);
   const target = targetResult.target;
   const hasResearch = Boolean(input.research);
@@ -198,7 +204,11 @@ export async function runTargetedTextWorkflow(args: {
       content: taggedPromptData("user_request", "", {
         text: input.request.userText,
         workflow,
-        target: targetSpec,
+        target: {
+          kind: target.kind,
+          heading: target.heading ?? null,
+          mode: target.mode,
+        },
       }),
     },
   ];

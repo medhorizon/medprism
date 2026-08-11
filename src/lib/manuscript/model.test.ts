@@ -51,4 +51,18 @@ describe("ManuscriptModel official template corpus", () => {
     expect(data[0]?.syntax).toBe("declaration-item");
     expect(data[0]?.canonical).toBe(true);
   });
+
+  it("does not confuse ACM template documentation sections with front matter", async () => {
+    const path = "templates/official/acm-acmart/sample-sigconf.tex";
+    const source = readFileSync(resolve(path), "utf8");
+    const snapshot = await buildContextSnapshot({
+      projectId: "acm",
+      files: { [path]: source },
+      mainFile: path,
+      activeFile: path,
+    });
+    const model = buildManuscriptModel(snapshot);
+    expect(occurrencesForSlot(model, { slot: "title" })).toHaveLength(1);
+    expect(occurrencesForSlot(model, { slot: "custom-section", title: "Title Information" })).toHaveLength(1);
+  });
 });

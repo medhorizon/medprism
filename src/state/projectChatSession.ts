@@ -2,6 +2,13 @@ import { runAssistant, type RuntimeRequest, type RuntimeResult } from "../lib/as
 import { LlmClientError, type ChatRequestMessage, type LlmConfig } from "../lib/llmClient";
 import type { WorkflowKind } from "../lib/workflows/types";
 import type { ChatMessage } from "../types/chat";
+import { withConversationArtifacts } from "../lib/conversationArtifacts";
+import {
+  confirmationControlForText,
+  pendingTaskFromMessages,
+  withPendingStatus,
+  type ConfirmationControl,
+} from "../lib/task/confirmation";
 import { saveProjectChat } from "./projectArtifacts";
 
 type SessionState = {
@@ -124,6 +131,7 @@ export type ProjectAssistantRequest = {
   thinkingLabel: string;
   mapError: (error: unknown) => string;
   onComplete?: (result: RuntimeResult) => void | Promise<void>;
+  confirmationControl?: { taskId: string; action: ConfirmationControl };
 };
 
 /**
@@ -138,11 +146,54 @@ export async function startProjectAssistant(
   const session = ensure(projectId);
   if (session.sending) return false;
 
-  const userMessage: ChatMessage = {
+  const activePending = pendingTaskFromMessages(session.messages);
+  const inferredControl = request.confirmationControl?.action ?? confirmationControlForText(request.displayUserText);
+  if (
+    request.confirmationControl &&
+    (!activePending || request.confirmationControl.taskId !== activePending.id)
+  ) {
+    // A stale card must never authorize, cancel, or supersede a newer task.
+    return false;
+  }
+  const resumeTask = activePending && inferredControl === "confirm" ? activePending : undefined;
+  const cancelTask = activePending && inferredControl === "cancel" ? activePending : undefined;
+
+  if (activePending) {
+    const status = resumeTask
+      ? "confirmed"
+      : cancelTask
+        ? "cancelled"
+        : "superseded";
+    session.messages = withPendingStatus(session.messages, activePending.id, status);
+  }
+
+  const userMessage: ChatMessage = withConversationArtifacts({
     id: crypto.randomUUID(),
     role: "user",
     content: request.displayUserText,
-  };
+  });
+
+  if (cancelTask) {
+    session.messages = [
+      ...session.messages,
+      userMessage,
+      withConversationArtifacts({
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: "已取消待处理的文件修改；项目文件没有变化。",
+        execution: {
+          schemaVersion: "1",
+          outcome: "answer",
+          taskSource: "resumed",
+          action: cancelTask.spec.action,
+          targetCount: cancelTask.targets.length,
+        },
+      }),
+    ];
+    persistDurableChat(projectId, session.messages);
+    emit();
+    return true;
+  }
   const thinkingId = crypto.randomUUID();
   const runId = ++session.runId;
   session.messages = [
@@ -167,8 +218,10 @@ export async function startProjectAssistant(
       config: request.config,
       userText: request.userText,
       history: request.history,
+      conversation: session.messages.filter((message) => message.id !== thinkingId),
       workflow: request.workflow,
       ctx: request.ctx,
+      ...(resumeTask ? { resumeTask } : {}),
       onDelta: (delta) => {
         if (!stillThisRun()) return;
         streamed += delta;
@@ -189,22 +242,29 @@ export async function startProjectAssistant(
     if (!stillThisRun()) return false;
 
     const primarySuggestion = result.suggestions[0];
-    const extra = result.suggestions.slice(1).map((suggestion) => ({
+    const extra = result.suggestions.slice(1).map((suggestion) => withConversationArtifacts({
       id: crypto.randomUUID(),
       role: "assistant" as const,
       content: suggestion.title || "Additional suggestion",
       suggestion,
     }));
     const current = ensure(projectId);
+    if (resumeTask && result.outcome === "blocked") {
+      current.messages = withPendingStatus(current.messages, resumeTask.id, "expired");
+    }
     current.messages = [
       ...current.messages.map((message) =>
         message.id === thinkingId
-          ? {
+          ? withConversationArtifacts({
               id: message.id,
               role: message.role,
               content: result.content,
               suggestion: primarySuggestion,
-            }
+              ...(result.confirmation
+                ? { confirmation: { task: result.confirmation, status: result.confirmation.status } }
+                : {}),
+              execution: result.execution,
+            })
           : message,
       ),
       ...extra,
@@ -223,13 +283,16 @@ export async function startProjectAssistant(
       return false;
     }
     const current = ensure(projectId);
+    if (resumeTask) {
+      current.messages = withPendingStatus(current.messages, resumeTask.id, "awaiting-confirmation");
+    }
     current.messages = current.messages.map((message) =>
       message.id === thinkingId
-        ? {
+        ? withConversationArtifacts({
             id: message.id,
             role: message.role,
             content: request.mapError(error),
-          }
+          })
         : message,
     );
     persistDurableChat(projectId, current.messages);

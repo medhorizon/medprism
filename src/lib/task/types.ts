@@ -1,4 +1,5 @@
 import type { ManuscriptSlotKind } from "../manuscript/types";
+import type { ConversationArtifact } from "../../types/chat";
 
 export type TaskAction =
   | "advice"
@@ -25,11 +26,11 @@ export type TaskEvidenceMode = "none" | "literature";
 export type TaskTarget = {
   slot: ManuscriptSlotKind | "custom-section";
   title?: string;
-  messageSegmentIds: string[];
+  sourceIds: string[];
 };
 
 export type TaskSpec = {
-  schemaVersion: "1";
+  schemaVersion: "2";
   action: TaskAction;
   applyMode: TaskApplyMode;
   contentMode: TaskContentMode;
@@ -38,17 +39,21 @@ export type TaskSpec = {
   targets: TaskTarget[];
 };
 
-export type MessageSegment = {
-  id: string;
-  start: number;
-  end: number;
-  text: string;
-};
-
 export type InterpretedTask = {
-  spec: TaskSpec;
-  segments: MessageSegment[];
-  source: "llm" | "locked" | "safe-fallback";
-  repaired: boolean;
-  warning?: string;
-};
+  sources: ConversationArtifact[];
+} & (
+  | {
+      ok: true;
+      spec: TaskSpec;
+      source: "llm" | "locked";
+      repaired: boolean;
+    }
+  | {
+      ok: false;
+      source: "invalid";
+      repaired: true;
+      error: string;
+  }
+);
+
+export type SuccessfulInterpretedTask = Extract<InterpretedTask, { ok: true }>;

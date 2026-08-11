@@ -8,6 +8,7 @@ import {
   displayHeading,
   matchHeading,
   normalizeHeading,
+  slotFamily,
   slotKey,
 } from "./slots";
 import type {
@@ -122,7 +123,13 @@ function sectionOccurrences(path: string, source: string, masked: string): Manus
     const located = commands[index]!;
     const title = source.slice(located.bodyStart, located.bodyEnd).trim();
     if (normalizeHeading(title) === "declarations") continue;
-    const ref = matchHeading(title);
+    const matched = matchHeading(title);
+    // Front-matter slots are owned by their profile syntax (commands or
+    // environments). A prose section such as ACM's "Title Information" is
+    // documentation, not a second manuscript title target.
+    const ref = slotFamily(matched) === "front"
+      ? { slot: "custom-section" as const, title }
+      : matched;
     const bodyEnd = Math.min(commands[index + 1]?.commandStart ?? boundary, boundary);
     out.push({
       id: occurrenceId(path, ref, located.commandStart),

@@ -20,6 +20,7 @@ import {
 } from "../lib/projectBinary";
 import { withSuggestionStatus } from "../lib/suggestions";
 import type { TextSelection } from "../lib/context/snapshot";
+import { confirmationControlForText, pendingTaskFromMessages } from "../lib/task/confirmation";
 import { useI18n } from "../i18n/context";
 import { DEMO_PROJECT_ID } from "../data/sample";
 import { loadAuth } from "../state/auth";
@@ -618,12 +619,23 @@ export function WorkspacePage() {
     return t("assistant.errorNetwork");
   }
 
-  async function send(text: string, explicitWorkflow?: WorkflowKind) {
+  async function send(
+    text: string,
+    explicitWorkflow?: WorkflowKind,
+    confirmationControl?: { taskId: string; action: "confirm" | "cancel" },
+  ) {
     const prompt = text.trim();
     const current = projectRef.current;
     if (!prompt || !current || isSessionSending(current.id)) return;
+    const sessionChat = getSessionChat(current.id);
+    const activePending = pendingTaskFromMessages(sessionChat);
+    const control = confirmationControl?.action ?? confirmationControlForText(prompt);
+    const validPendingControl = Boolean(
+      activePending && control &&
+      (!confirmationControl || confirmationControl.taskId === activePending.id),
+    );
     const config = resolveLlmConfig();
-    if (!isUsableLlmConfig(config)) {
+    if (!isUsableLlmConfig(config) && !validPendingControl) {
       updateChat(
         (previous) => [
           ...previous,
@@ -646,7 +658,7 @@ export function WorkspacePage() {
     const selectedText = requestSelection
       ? requestFiles[requestActiveFile]?.slice(requestSelection.start, requestSelection.end)
       : undefined;
-    const history = toLlmHistory(getSessionChat(requestProjectId), prompt);
+    const history = toLlmHistory(sessionChat);
     const requestMemory = loadProjectMemory(requestProjectId);
 
     const reviewChip = t("assistant.qReview");
@@ -686,6 +698,7 @@ export function WorkspacePage() {
         userText: chipUserText,
         history,
         workflow: explicitWorkflow ?? chipWorkflow ?? "auto",
+        ...(confirmationControl ? { confirmationControl } : {}),
         thinkingLabel: t("assistant.thinking"),
         mapError: llmErrorMessage,
         ctx: {
@@ -938,6 +951,14 @@ export function WorkspacePage() {
                 quickPrompts={quickPrompts}
                 onKeep={(message) => void keepSuggestion(message)}
                 onUndo={(message) => void undoSuggestion(message)}
+                onConfirm={(message) => {
+                  const taskId = message.confirmation?.task.id;
+                  if (taskId) void send(t("assistant.confirmContinue"), undefined, { taskId, action: "confirm" });
+                }}
+                onCancelConfirmation={(message) => {
+                  const taskId = message.confirmation?.task.id;
+                  if (taskId) void send(t("common.cancel"), undefined, { taskId, action: "cancel" });
+                }}
                 sending={sending}
                 memoryNotes={memoryNotes}
                 onMemoryNotesChange={(notes) => {

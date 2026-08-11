@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { routeWorkflow } from "../skillRouter";
 import { simulatePatchSet } from "../patch/simulate";
+import { buildContextSnapshot } from "../context/snapshot";
+import { resolveTaskContext } from "../context/resolver";
+import { buildManuscriptModel } from "../manuscript/model";
 import type { ToolContext, ToolResult } from "../../tools/types";
 import { executeWorkflow, listWorkflows } from "./executor";
 import type { WorkflowRequest, WorkflowServices } from "./types";
@@ -135,6 +138,62 @@ describe("workflow executor", () => {
     });
     expect(ctx.files["main.tex"]).toBe("Original sentence.");
     expect((systemPrompt.match(/# Selected skill:/g) ?? [])).toHaveLength(1);
+  });
+
+  it("drafts a missing ethics slot through the resolved semantic target", async () => {
+    const source = "\\documentclass{article}\n\\begin{document}\n\\section{Introduction}\nText.\n\\end{document}";
+    const ctx = context({ source });
+    const snapshot = await buildContextSnapshot(ctx);
+    const resolvedTask = resolveTaskContext({
+      snapshot,
+      model: buildManuscriptModel(snapshot),
+      interpreted: {
+        ok: true,
+        spec: {
+          schemaVersion: "2",
+          action: "draft",
+          applyMode: "propose-patch",
+          contentMode: "generate",
+          scope: "targets",
+          evidenceMode: "none",
+          targets: [{ slot: "ethics", sourceIds: [] }],
+        },
+        sources: [],
+        source: "llm",
+        repaired: false,
+      },
+    });
+    const result = await executeWorkflow({
+      request: {
+        kind: "writing",
+        userText: "起草伦理声明",
+        resolvedTask,
+        plan: { primary: "writing", steps: ["writing", "latex-apply"], applyToLatex: true },
+      },
+      config,
+      history: [],
+      ctx,
+    }, services({
+      modelResponses: [JSON.stringify({
+        schemaVersion: "1",
+        workflow: "writing",
+        summary: "Draft ethics statement",
+        warnings: [],
+        textDraft: {
+          text: "The study was approved by the institutional ethics committee.",
+          format: "plain-text",
+          sourceCandidateIds: [],
+        },
+      })],
+    }));
+    expect(result.agent.patch).toBeDefined();
+    const simulated = await simulatePatchSet({ "main.tex": source }, result.agent.patch!);
+    expect(simulated.ok).toBe(true);
+    if (simulated.ok) {
+      expect(simulated.simulation.nextFiles["main.tex"]).toContain(
+        "\\section*{Ethics approval and consent to participate}",
+      );
+    }
   });
 
   it.each([

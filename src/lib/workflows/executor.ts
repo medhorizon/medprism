@@ -71,16 +71,6 @@ function defaultResearch(kind: WorkflowKind): ResearchSpec | undefined {
   return undefined;
 }
 
-function modifiesLatex(kind: WorkflowKind): boolean {
-  return (
-    kind === "writing" ||
-    kind === "polish" ||
-    kind === "citation" ||
-    kind === "latex" ||
-    kind === "compile-fix"
-  );
-}
-
 function normalizedPlan(input: ExecuteWorkflowInput): WorkflowPlan {
   const primary = input.request.kind;
   const supplied = input.request.plan;
@@ -92,7 +82,9 @@ function normalizedPlan(input: ExecuteWorkflowInput): WorkflowPlan {
       ? { kind: "selection" as const, createIfMissing: false }
       : undefined
   );
-  const applyToLatex = primary === "advice" ? false : modifiesLatex(primary);
+  const applyToLatex = input.request.resolvedTask
+    ? input.request.resolvedTask.spec.applyMode === "propose-patch"
+    : supplied?.applyToLatex ?? false;
   const steps: WorkflowPlan["steps"] = primary === "research" || primary === "advice"
     ? [primary]
     : [

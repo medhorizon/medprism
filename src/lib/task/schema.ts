@@ -26,7 +26,7 @@ const TASK_KEYS = new Set([
   "schemaVersion", "action", "applyMode", "contentMode", "scope",
   "evidenceMode", "targets",
 ]);
-const TARGET_KEYS = new Set(["slot", "title", "messageSegmentIds"]);
+const TARGET_KEYS = new Set(["slot", "title", "sourceIds"]);
 
 export type ParseTaskSpecResult =
   | { ok: true; value: TaskSpec }
@@ -62,7 +62,7 @@ function containsForbiddenKey(value: unknown): string | null {
   return null;
 }
 
-function parseTargets(value: unknown, allowedSegmentIds: Set<string>): TaskTarget[] | null {
+function parseTargets(value: unknown, allowedSourceIds: Set<string>): TaskTarget[] | null {
   if (!Array.isArray(value)) return null;
   const targets: TaskTarget[] = [];
   for (const item of value) {
@@ -74,13 +74,13 @@ function parseTargets(value: unknown, allowedSegmentIds: Set<string>): TaskTarge
     if (!isCustom && !MANUSCRIPT_SLOT_KINDS.has(raw.slot as ManuscriptSlotKind)) return null;
     if (isCustom && (typeof raw.title !== "string" || !raw.title.trim())) return null;
     if (!isCustom && raw.title !== undefined) return null;
-    if (!Array.isArray(raw.messageSegmentIds) || raw.messageSegmentIds.some((id) => typeof id !== "string" || !allowedSegmentIds.has(id))) {
+    if (!Array.isArray(raw.sourceIds) || raw.sourceIds.some((id) => typeof id !== "string" || !allowedSourceIds.has(id))) {
       return null;
     }
     targets.push({
       slot: raw.slot as TaskTarget["slot"],
       ...(isCustom ? { title: (raw.title as string).trim() } : {}),
-      messageSegmentIds: [...new Set(raw.messageSegmentIds as string[])],
+      sourceIds: [...new Set(raw.sourceIds as string[])],
     });
   }
   return targets;
@@ -88,28 +88,55 @@ function parseTargets(value: unknown, allowedSegmentIds: Set<string>): TaskTarge
 
 function invariantError(spec: TaskSpec): string | null {
   if (["advice", "review", "research"].includes(spec.action)) {
-    if (spec.applyMode !== "answer-only") return `${spec.action} must be answer-only`;
+    if (spec.applyMode !== "answer-only" || spec.contentMode !== "none" || spec.targets.length !== 0) {
+      return `${spec.action} must be answer-only with no content or targets`;
+    }
+  } else if (spec.applyMode !== "propose-patch") {
+    return `${spec.action} must use propose-patch`;
+  }
+  if (
+    !["advice", "review", "research", "compile-fix"].includes(spec.action) &&
+    spec.scope !== "selection" &&
+    spec.targets.length === 0
+  ) {
+    return `${spec.action} requires a target or selection`;
   }
   if (spec.action === "scaffold") {
-    if (spec.applyMode !== "propose-patch" || spec.contentMode !== "blank" || spec.evidenceMode !== "none") {
+    if (spec.applyMode !== "propose-patch" || spec.contentMode !== "blank" || spec.evidenceMode !== "none" || spec.targets.length === 0) {
       return "scaffold must use propose-patch, blank, and no evidence";
     }
   }
-  if (spec.action === "fill-sections" && spec.contentMode !== "provided") {
-    return "fill-sections must use provided content";
+  if (spec.action === "fill-sections") {
+    if (spec.contentMode !== "provided" || spec.targets.length === 0 || spec.targets.some((target) => target.sourceIds.length === 0)) {
+      return "fill-sections must use provided content and at least one sourced target";
+    }
   }
   if (spec.action === "cite") {
     if (spec.applyMode !== "propose-patch" || spec.evidenceMode !== "literature") {
       return "cite must use propose-patch and literature evidence";
     }
   }
+  if (spec.action === "draft" && spec.contentMode !== "generate") {
+    return "draft must use generated content";
+  }
+  if (spec.action === "polish" && spec.targets.length === 0 && spec.scope !== "selection") {
+    return "polish requires a target or selection";
+  }
+  if (spec.action === "compile-fix" && spec.scope !== "compile-log") {
+    return "compile-fix requires compile-log scope";
+  }
   return null;
 }
 
 export function parseTaskSpec(
   raw: string,
-  allowedSegmentIds: readonly string[],
-  lockedAction?: TaskAction,
+  allowedSourceIds: readonly string[],
+  options?: {
+    lockedAction?: TaskAction;
+    requireProposePatch?: boolean;
+    requireAnswerOnly?: boolean;
+    selectionAvailable?: boolean;
+  },
 ): ParseTaskSpecResult {
   let value: unknown;
   try {
@@ -123,18 +150,18 @@ export function parseTaskSpec(
   const object = value as Record<string, unknown>;
   const unexpected = Object.keys(object).find((key) => !TASK_KEYS.has(key));
   if (unexpected) return { ok: false, message: `TaskSpec contains unsupported field: ${unexpected}` };
-  const schemaVersion = object.schemaVersion === 1 ? "1" : object.schemaVersion;
-  if (schemaVersion !== "1") return { ok: false, message: 'TaskSpec schemaVersion must be "1"' };
+  const schemaVersion = object.schemaVersion === 2 ? "2" : object.schemaVersion;
+  if (schemaVersion !== "2") return { ok: false, message: 'TaskSpec schemaVersion must be "2"' };
   if (typeof object.action !== "string" || !ACTIONS.has(object.action as TaskAction)) return { ok: false, message: "TaskSpec action is invalid" };
-  const action = lockedAction ?? object.action;
+  const action = options?.lockedAction ?? object.action;
   if (typeof object.applyMode !== "string" || !APPLY_MODES.has(object.applyMode as TaskApplyMode)) return { ok: false, message: "TaskSpec applyMode is invalid" };
   if (typeof object.contentMode !== "string" || !CONTENT_MODES.has(object.contentMode as TaskContentMode)) return { ok: false, message: "TaskSpec contentMode is invalid" };
   if (typeof object.scope !== "string" || !SCOPES.has(object.scope as TaskScope)) return { ok: false, message: "TaskSpec scope is invalid" };
   if (typeof object.evidenceMode !== "string" || !EVIDENCE_MODES.has(object.evidenceMode as TaskEvidenceMode)) return { ok: false, message: "TaskSpec evidenceMode is invalid" };
-  const targets = parseTargets(object.targets, new Set(allowedSegmentIds));
+  const targets = parseTargets(object.targets, new Set(allowedSourceIds));
   if (!targets) return { ok: false, message: "TaskSpec targets are invalid" };
   const spec: TaskSpec = {
-    schemaVersion: "1",
+    schemaVersion: "2",
     action: action as TaskAction,
     applyMode: object.applyMode as TaskApplyMode,
     contentMode: object.contentMode as TaskContentMode,
@@ -142,18 +169,20 @@ export function parseTaskSpec(
     evidenceMode: object.evidenceMode as TaskEvidenceMode,
     targets,
   };
+  if (options?.requireProposePatch && spec.applyMode !== "propose-patch") {
+    return { ok: false, message: "The user explicitly requested a file change; propose-patch is required" };
+  }
+  if (options?.requireAnswerOnly && spec.applyMode !== "answer-only") {
+    return { ok: false, message: "The user is exploring candidates or asking a question; answer-only is required" };
+  }
+  if (
+    options?.selectionAvailable === false &&
+    spec.applyMode === "propose-patch" &&
+    spec.scope === "selection" &&
+    spec.targets.length === 0
+  ) {
+    return { ok: false, message: "No UI selection is available; choose a semantic target" };
+  }
   const invariant = invariantError(spec);
   return invariant ? { ok: false, message: invariant } : { ok: true, value: spec };
-}
-
-export function safeAdviceTask(): TaskSpec {
-  return {
-    schemaVersion: "1",
-    action: "advice",
-    applyMode: "answer-only",
-    contentMode: "none",
-    scope: "active-file",
-    evidenceMode: "none",
-    targets: [],
-  };
 }

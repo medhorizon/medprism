@@ -8,6 +8,9 @@ import {
   formatWorkspaceContext,
   type ContextSnapshot,
 } from "../context/snapshot";
+import type { ResolvedTask } from "../context/resolver";
+import type { ResolvedLatexTarget } from "../latex/types";
+import { displayHeading } from "../manuscript/slots";
 import { taggedPromptData } from "../promptData";
 import { compactPaperHits, validateResearchUse } from "../research/service";
 import { parseModelWorkflowEnvelope } from "../replyParse";
@@ -28,6 +31,85 @@ import {
 } from "./types";
 
 const WRITING_KINDS = new Set<WorkflowKind>(["writing", "polish", "latex"]);
+
+function latexKindForResolved(ref: ResolvedTask["targets"][number]["ref"]): ResolvedLatexTarget["kind"] {
+  if (ref.slot === "custom-section") return "section";
+  if (ref.slot === "competing-interests") return "conflict-of-interest";
+  if ([
+    "title", "abstract", "keywords", "introduction", "methods", "results", "discussion",
+    "conclusion", "funding", "acknowledgements", "author-contributions", "data-availability",
+    "ethics", "body",
+  ].includes(ref.slot)) return ref.slot as ResolvedLatexTarget["kind"];
+  return "section";
+}
+
+function resolvedTextTarget(
+  snapshot: ContextSnapshot,
+  resolved: ResolvedTask,
+): { ok: true; target: ResolvedLatexTarget } | { ok: false; message: string } {
+  if (resolved.selection) {
+    return {
+      ok: true,
+      target: {
+        kind: "selection",
+        path: resolved.selection.path,
+        mode: "replace_body",
+        syntax: "selection",
+        existingText: resolved.selection.text,
+        sourceContext: snapshot.localContext,
+        range: resolved.selection.range,
+      },
+    };
+  }
+  if (resolved.targets.length !== 1) {
+    return { ok: false, message: "Generated or polished prose requires exactly one resolved semantic target." };
+  }
+  const binding = resolved.targets[0]!;
+  const kind = latexKindForResolved(binding.ref);
+  if (binding.occurrence) {
+    const occurrence = binding.occurrence;
+    const source = snapshot.files[occurrence.path] ?? "";
+    const center = occurrence.wrapperRange.start;
+    return {
+      ok: true,
+      target: {
+        kind,
+        path: occurrence.path,
+        mode: "replace_body",
+        syntax: occurrence.syntax === "declaration-item" ? "section" : occurrence.syntax,
+        existingText: occurrence.body,
+        sourceContext: source.slice(Math.max(0, center - 1000), Math.min(source.length, occurrence.wrapperRange.end + 1000)),
+        range: occurrence.bodyRange,
+        heading: occurrence.heading,
+        ...(kind === "title" || kind === "keywords" ? { commandName: kind } : {}),
+      },
+    };
+  }
+  if (binding.insertion) {
+    const insertion = binding.insertion;
+    const source = snapshot.files[insertion.path];
+    if (source === undefined || insertion.at >= source.length) {
+      return { ok: false, message: "The semantic insertion point is no longer available." };
+    }
+    const end = Math.min(source.length, insertion.at + 120);
+    return {
+      ok: true,
+      target: {
+        kind,
+        path: insertion.path,
+        mode: "insert_before",
+        syntax: insertion.syntax === "declaration-item" ? "section" : insertion.syntax,
+        existingText: "",
+        sourceContext: source.slice(Math.max(0, insertion.at - 1000), Math.min(source.length, end + 1000)),
+        range: { start: insertion.at, end },
+        anchor: source.slice(insertion.at, end),
+        heading: displayHeading(binding.ref),
+        ...(kind === "title" || kind === "keywords" ? { commandName: kind } : {}),
+      },
+    };
+  }
+  return { ok: false, message: "The semantic text target could not be resolved." };
+}
 
 function projectHint(input: WorkflowExecutionInput): string {
   const path = input.ctx.activeFile ?? input.ctx.mainFile ?? Object.keys(input.ctx.files)[0];
@@ -83,6 +165,14 @@ export const runWritingWorkflow: WorkflowHandler = async (input) => {
     if (semantic) return semantic;
   }
   const skill = selectedWritingSkill(input);
+  if (
+    input.request.resolvedTask &&
+    (input.request.resolvedTask.spec.action === "draft" || input.request.resolvedTask.spec.action === "polish")
+  ) {
+    const target = resolvedTextTarget(snapshot, input.request.resolvedTask);
+    if (!target.ok) return invalidModelResult(kind, target.message);
+    return runTargetedTextWorkflow({ input, snapshot, skill, resolvedTarget: target.target });
+  }
   const target = input.request.plan?.target;
 
   // All runtime-locatable prose targets use the same trusted LaTeX adapter.

@@ -11,6 +11,7 @@ import {
   type StorageLike,
 } from "./projectArtifacts";
 import type { ChatMessage } from "../types/chat";
+import { buildConversationArtifacts } from "../lib/conversationArtifacts";
 
 function memoryStorage(): StorageLike & { data: Map<string, string> } {
   const data = new Map<string, string>();
@@ -47,7 +48,9 @@ describe("projectArtifacts", () => {
       },
     ];
     expect(saveProjectChat("proj-1", messages, storage)).toBe(true);
-    expect(loadProjectChat("proj-1", storage)).toEqual(messages);
+    const loaded = loadProjectChat("proj-1", storage)!;
+    expect(loaded.map(({ artifacts: _artifacts, ...message }) => message)).toEqual(messages);
+    expect(loaded.every((message) => (message.artifacts?.length ?? 0) > 0)).toBe(true);
     expect(loadProjectChat("other", storage)).toBeNull();
   });
 
@@ -93,7 +96,7 @@ describe("projectArtifacts", () => {
       },
     ];
     expect(saveProjectChat("proj-1", messages, storage, "已中断")).toBe(true);
-    expect(loadProjectChat("proj-1", storage)).toEqual([
+    expect(loadProjectChat("proj-1", storage)?.map(({ artifacts: _artifacts, ...message }) => message)).toEqual([
       { id: "u1", role: "user", content: "hello" },
       { id: "a2", role: "assistant", content: "已中断" },
     ]);
@@ -111,14 +114,86 @@ describe("projectArtifacts", () => {
         ],
       }),
     );
-    expect(loadProjectChat("proj-1", storage, "Interrupted")).toEqual([
+    expect(loadProjectChat("proj-1", storage, "Interrupted")?.map(({ artifacts: _artifacts, ...message }) => message)).toEqual([
       { id: "a1", role: "assistant", content: "Interrupted" },
     ]);
     expect(
       finalizeChatMessages(
         [{ id: "a1", role: "assistant", content: "ok", pending: true }],
         "Interrupted",
-      ),
+      ).map(({ artifacts: _artifacts, ...message }) => message),
     ).toEqual([{ id: "a1", role: "assistant", content: "Interrupted" }]);
+  });
+
+  it("persists and restores a revision-bound pending confirmation", () => {
+    const storage = memoryStorage();
+    const artifacts = buildConversationArtifacts({ messageId: "u1", role: "user", content: "修改标题为New Title" });
+    const source = artifacts.find((artifact) => artifact.kind === "assignment-value")!;
+    const task = {
+      schemaVersion: "1" as const,
+      id: "task-1",
+      projectId: "proj-1",
+      projectRevision: "revision-1",
+      createdAt: new Date().toISOString(),
+      status: "awaiting-confirmation" as const,
+      spec: {
+        schemaVersion: "2" as const,
+        action: "fill-sections" as const,
+        applyMode: "propose-patch" as const,
+        contentMode: "provided" as const,
+        scope: "targets" as const,
+        evidenceMode: "none" as const,
+        targets: [{ slot: "title" as const, sourceIds: [source.id] }],
+      },
+      sources: [source],
+      targets: [{ id: "title", slot: "Title", operation: "replace" as const }],
+    };
+    const messages: ChatMessage[] = [
+      { id: "u1", role: "user", content: "修改标题为New Title", artifacts },
+      {
+        id: "a1",
+        role: "assistant",
+        content: "Confirm",
+        confirmation: { task, status: "awaiting-confirmation" },
+      },
+    ];
+    expect(saveProjectChat("proj-1", messages, storage)).toBe(true);
+    expect(loadProjectChat("proj-1", storage)?.[1]?.confirmation?.task).toMatchObject({
+      id: "task-1",
+      projectRevision: "revision-1",
+      status: "awaiting-confirmation",
+    });
+  });
+
+  it("expires a restored pending task when its source message is unavailable", () => {
+    const storage = memoryStorage();
+    const artifacts = buildConversationArtifacts({ messageId: "missing", role: "assistant", content: "*Historical Title*" });
+    const source = artifacts.find((artifact) => artifact.kind === "emphasis")!;
+    const task = {
+      schemaVersion: "1" as const,
+      id: "task-missing-source",
+      projectId: "proj-1",
+      projectRevision: "revision-1",
+      createdAt: new Date().toISOString(),
+      status: "awaiting-confirmation" as const,
+      spec: {
+        schemaVersion: "2" as const,
+        action: "fill-sections" as const,
+        applyMode: "propose-patch" as const,
+        contentMode: "provided" as const,
+        scope: "targets" as const,
+        evidenceMode: "none" as const,
+        targets: [{ slot: "title" as const, sourceIds: [source.id] }],
+      },
+      sources: [source],
+      targets: [{ id: "title", slot: "Title", operation: "replace" as const }],
+    };
+    expect(saveProjectChat("proj-1", [{
+      id: "a1",
+      role: "assistant",
+      content: "Confirm",
+      confirmation: { task, status: "awaiting-confirmation" },
+    }], storage)).toBe(true);
+    expect(loadProjectChat("proj-1", storage)?.[0]?.confirmation?.status).toBe("expired");
   });
 });

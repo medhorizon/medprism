@@ -12,8 +12,8 @@ import type {
   ManuscriptOccurrence,
   ManuscriptSlotRef,
 } from "../manuscript/types";
-import { segmentTextByIds } from "../task/segments";
-import type { InterpretedTask, TaskSpec } from "../task/types";
+import { validateConversationArtifact } from "../conversationArtifacts";
+import type { SuccessfulInterpretedTask, TaskSpec } from "../task/types";
 
 export type ResolvedTargetBinding = {
   id: string;
@@ -30,8 +30,10 @@ export type ResolvedSelection = {
 };
 
 export type ResolvedTask = {
+  projectId: string;
   spec: TaskSpec;
   model: ManuscriptModel;
+  sourceArtifacts: SuccessfulInterpretedTask["sources"];
   targets: ResolvedTargetBinding[];
   selection?: ResolvedSelection;
   contextBlocks: Array<{ id: string; path: string; text: string }>;
@@ -69,6 +71,18 @@ function contextForOccurrence(occurrence: ManuscriptOccurrence): {
   };
 }
 
+function mostSpecificSources<T extends { messageId: string; start: number; end: number }>(sources: T[]): T[] {
+  return sources.filter((candidate, index) =>
+    !sources.some((other, otherIndex) =>
+      otherIndex !== index &&
+      other.messageId === candidate.messageId &&
+      other.start >= candidate.start &&
+      other.end <= candidate.end &&
+      (other.start > candidate.start || other.end < candidate.end),
+    ),
+  );
+}
+
 function defaultDocumentTargets(model: ManuscriptModel): ManuscriptOccurrence[] {
   return model.occurrences
     .filter((occurrence) => occurrence.canonical)
@@ -84,7 +98,7 @@ function defaultDocumentTargets(model: ManuscriptModel): ManuscriptOccurrence[] 
 export function resolveTaskContext(args: {
   snapshot: ContextSnapshot;
   model: ManuscriptModel;
-  interpreted: InterpretedTask;
+  interpreted: SuccessfulInterpretedTask;
 }): ResolvedTask {
   const { snapshot, model, interpreted } = args;
   const warnings: string[] = [];
@@ -118,7 +132,20 @@ export function resolveTaskContext(args: {
       continue;
     }
     const occurrence = canonicalOccurrence(model, ref);
-    const providedText = segmentTextByIds(interpreted.segments, target.messageSegmentIds);
+    const sourceIds = new Set(target.sourceIds);
+    const selectedSources = interpreted.sources.filter((source) => sourceIds.has(source.id));
+    const invalidSource = selectedSources.find((source) => !validateConversationArtifact(source));
+    if (invalidSource || selectedSources.length !== sourceIds.size) {
+      errors.push(`Trusted source artifacts are missing or invalid for ${slotKey(ref)}.`);
+      continue;
+    }
+    const specificSources = mostSpecificSources(selectedSources);
+    const uniqueSourceTexts = [...new Set(specificSources.map((source) => source.text))];
+    if (ref.slot === "title" && uniqueSourceTexts.length > 1) {
+      errors.push("The title target resolves to multiple distinct source artifacts.");
+      continue;
+    }
+    const providedText = uniqueSourceTexts.join("\n");
     if (occurrence) {
       const binding: ResolvedTargetBinding = {
         id: `binding:${occurrence.id}`,
@@ -171,10 +198,21 @@ export function resolveTaskContext(args: {
     }
   }
 
-  if (interpreted.warning) warnings.push(interpreted.warning);
+  if (
+    interpreted.spec.applyMode === "propose-patch" &&
+    interpreted.spec.action !== "compile-fix" &&
+    !selection &&
+    bindings.length === 0 &&
+    errors.length === 0
+  ) {
+    errors.push("No trusted selection or semantic target is available for this file transaction.");
+  }
+
   return {
+    projectId: snapshot.projectId,
     spec: interpreted.spec,
     model,
+    sourceArtifacts: interpreted.sources,
     targets: bindings,
     ...(selection ? { selection } : {}),
     contextBlocks,

@@ -1,6 +1,6 @@
 import type { ContextSnapshot } from "../context/snapshot";
 import type { ResolvedTask, ResolvedTargetBinding } from "../context/resolver";
-import { escapeLatexPlainText } from "../latex/targets";
+import { escapeLatexPlainText, locateLatexCommands, structuralMask } from "../latex/targets";
 import { renderFilledSlot } from "../manuscript/profiles";
 import { displayHeading, slotOrder } from "../manuscript/slots";
 import { sha256Hex } from "../patch/hash";
@@ -32,7 +32,7 @@ export function repairProvidedText(text: string): string {
 function stripHeadingPrefix(text: string, heading: string): string {
   const escaped = heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\s+/g, "\\s+");
   return text
-    .replace(new RegExp(`^${escaped}\\s*[:.：-]?\\s*`, "i"), "")
+    .replace(new RegExp(`^${escaped}\\s*[:：-]\\s*`, "i"), "")
     .trim();
 }
 
@@ -42,6 +42,14 @@ function replacementText(binding: ResolvedTargetBinding, plain: string): string 
   if (occurrence.syntax === "environment") return `\n${escaped}\n`;
   if (occurrence.syntax === "section") return `\n${escaped}\n\n`;
   return escaped;
+}
+
+function shortTitleFrom(title: string): string {
+  const compact = title.replace(/\s+/g, " ").trim();
+  const clause = compact.split(/[:.?!—–]/u)[0]?.trim() || compact;
+  if (clause.length <= 60) return clause;
+  const sliced = clause.slice(0, 57).replace(/\s+\S*$/, "").trim();
+  return `${sliced || clause.slice(0, 57)}...`;
 }
 
 async function buildOperations(
@@ -74,6 +82,15 @@ async function buildOperations(
       let oldText = source.slice(range.start, range.end);
       let newText = replacementText(binding, body);
       let operationRange = range;
+      if (binding.ref.slot === "title" && binding.occurrence.syntax === "command") {
+        const titleCommand = locateLatexCommands(source, structuralMask(source), "title")
+          .find((command) => command.commandStart === binding.occurrence!.wrapperRange.start);
+        if (titleCommand?.optionalArg !== undefined) {
+          operationRange = binding.occurrence.wrapperRange;
+          oldText = source.slice(operationRange.start, operationRange.end);
+          newText = `\\title[${escapeLatexPlainText(shortTitleFrom(body))}]{${escapeLatexPlainText(body)}}`;
+        }
+      }
       if (!oldText) {
         const wrapper = binding.occurrence.wrapperRange;
         oldText = source.slice(wrapper.start, wrapper.end);

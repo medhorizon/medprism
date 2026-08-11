@@ -11,8 +11,12 @@ import { buildContextSnapshot } from "./context/snapshot";
 import { resolveTaskContext, type ResolvedTask } from "./context/resolver";
 import { buildManuscriptModel } from "./manuscript/model";
 import { interpretTaskSpec, lockedTaskAction } from "./task/interpreter";
+import {
+  buildPendingFileTask,
+  interpretedFromPending,
+} from "./task/confirmation";
+import { artifactTextHash, conversationArtifacts } from "./conversationArtifacts";
 import type { TaskAction } from "./task/types";
-import type { LatexTargetSpec } from "./latex/types";
 import { enrichSuggestion } from "./suggestions";
 import { executeWorkflow } from "./workflows/executor";
 import type {
@@ -25,7 +29,13 @@ import {
   type AssistantMode,
   type ToolContext,
 } from "../tools";
-import type { ChatMessage, ChatSuggestion } from "../types/chat";
+import type {
+  AssistantOutcomeKind,
+  ChatExecution,
+  ChatMessage,
+  ChatSuggestion,
+  PendingFileTask,
+} from "../types/chat";
 
 ensureToolsRegistered();
 
@@ -34,6 +44,7 @@ export type RuntimeRequest = {
   config: LlmConfig;
   userText: string;
   history: ChatRequestMessage[];
+  conversation: ChatMessage[];
   ctx: ToolContext;
   /** Preferred explicit UI action. */
   workflow?: "auto" | WorkflowKind;
@@ -42,6 +53,8 @@ export type RuntimeRequest = {
   /** Incremental text callback for the active project chat session. */
   onDelta?: (delta: string) => void;
   signal?: AbortSignal;
+  /** Trusted confirmation state; when present the interpreter is not called again. */
+  resumeTask?: PendingFileTask;
 };
 
 export type RuntimeResult = {
@@ -49,8 +62,16 @@ export type RuntimeResult = {
   content: string;
   suggestions: NonNullable<ChatMessage["suggestion"]>[];
   toolNotes: string[];
+  outcome: AssistantOutcomeKind;
+  execution: ChatExecution;
+  confirmation?: PendingFileTask;
   lastCompileLog?: string;
   pdfBase64?: string;
+};
+
+export type AssistantRuntimeDependencies = {
+  interpret: typeof interpretTaskSpec;
+  execute: typeof executeWorkflow;
 };
 
 function asSuggestion(patchSet: NonNullable<ChatSuggestion["patchSet"]>): ChatSuggestion {
@@ -88,34 +109,12 @@ function workflowForAction(action: TaskAction): WorkflowKind {
   return "writing";
 }
 
-function legacyTarget(resolved: ResolvedTask): LatexTargetSpec | undefined {
-  if (resolved.selection) return { kind: "selection", createIfMissing: false };
-  const ref = resolved.targets[0]?.ref;
-  if (!ref) return undefined;
-  if (ref.slot === "custom-section") {
-    return { kind: "section", sectionTitle: ref.title, createIfMissing: true };
-  }
-  const direct = new Set<LatexTargetSpec["kind"]>([
-    "title", "abstract", "keywords", "introduction", "methods", "results",
-    "discussion", "conclusion", "acknowledgements", "funding",
-    "author-contributions", "data-availability", "ethics", "body",
-  ]);
-  if (direct.has(ref.slot as LatexTargetSpec["kind"])) {
-    return { kind: ref.slot as LatexTargetSpec["kind"], createIfMissing: true };
-  }
-  if (ref.slot === "competing-interests") {
-    return { kind: "conflict-of-interest", createIfMissing: true };
-  }
-  return { kind: "section", sectionTitle: resolved.targets[0]?.occurrence?.heading ?? ref.slot, createIfMissing: true };
-}
-
 function workflowRequestFromTask(
   req: RuntimeRequest,
   resolved: ResolvedTask,
 ): WorkflowRequest {
   const kind = workflowForAction(resolved.spec.action);
-  const applyToLatex = !["advice", "review", "research"].includes(kind);
-  const target = legacyTarget(resolved);
+  const applyToLatex = resolved.spec.applyMode === "propose-patch";
   return {
     kind,
     userText: req.userText,
@@ -127,36 +126,142 @@ function workflowRequestFromTask(
     plan: {
       primary: kind,
       steps: applyToLatex ? [kind, "latex-apply"] : [kind],
-      ...(target ? { target } : {}),
       applyToLatex,
     },
     resolvedTask: resolved,
   };
 }
 
-export async function runAssistant(req: RuntimeRequest): Promise<RuntimeResult> {
+function blockedResult(args: {
+  message: string;
+  source: ChatExecution["taskSource"];
+  action?: TaskAction;
+  targetCount?: number;
+  failureCode: string;
+  notes?: string[];
+}): RuntimeResult {
+  const execution: ChatExecution = {
+    schemaVersion: "1",
+    outcome: "blocked",
+    taskSource: args.source,
+    ...(args.action ? { action: args.action } : {}),
+    targetCount: args.targetCount ?? 0,
+    failureCode: args.failureCode,
+  };
+  return {
+    agent: {
+      schemaVersion: "1",
+      workflow: args.action ? workflowForAction(args.action) : "advice",
+      summary: "File transaction blocked",
+      warnings: [args.message],
+    },
+    content: `未修改项目文件：${args.message}`,
+    suggestions: [],
+    toolNotes: [...(args.notes ?? []), `outcome:blocked:${args.failureCode}`],
+    outcome: "blocked",
+    execution,
+  };
+}
+
+function confirmationText(task: PendingFileTask): string {
+  const targets = task.targets.map((target) => `${target.slot}${target.path ? `（${target.path}）` : ""}`).join("、");
+  const preview = task.targets.map((target) => target.preview).find(Boolean);
+  return `检测到文件修改请求，将处理：${targets || "当前选区"}。${preview ? `\n\n内容预览：${preview}` : ""}\n\n请确认是否继续生成 Diff/Keep；此时尚未修改项目文件。`;
+}
+
+export async function runAssistant(
+  req: RuntimeRequest,
+  dependencies: Partial<AssistantRuntimeDependencies> = {},
+): Promise<RuntimeResult> {
+  const interpret = dependencies.interpret ?? interpretTaskSpec;
+  const execute = dependencies.execute ?? executeWorkflow;
   const explicitWorkflow = req.workflow && req.workflow !== "auto"
     ? req.workflow
     : req.mode === "review"
       ? "review"
       : undefined;
-  const explicitAction = explicitWorkflow ? actionForWorkflow(explicitWorkflow) : undefined;
-  const lockedAction = lockedTaskAction({
-    userText: req.userText,
-    ...(explicitAction ? { explicitAction } : {}),
-  });
   const snapshot = await buildContextSnapshot(req.ctx);
   const model = buildManuscriptModel(snapshot);
-  const interpreted = await interpretTaskSpec({
-    config: req.config,
-    userText: req.userText,
-    history: req.history,
-    model,
-    ...(lockedAction ? { lockedAction } : {}),
-    ...(req.signal ? { signal: req.signal } : {}),
-  });
+  const explicitAction = explicitWorkflow ? actionForWorkflow(explicitWorkflow) : undefined;
+  const lockedAction = lockedTaskAction({ userText: req.userText, ...(explicitAction ? { explicitAction } : {}) });
+  const resumed = req.resumeTask;
+  const interpreted = resumed
+    ? interpretedFromPending(resumed)
+    : await interpret({
+        config: req.config,
+        userText: req.userText,
+        history: req.history,
+        model,
+        sources: conversationArtifacts(req.conversation),
+        selectionAvailable: Boolean(snapshot.selection),
+        ...(lockedAction ? { lockedAction } : {}),
+        ...(req.signal ? { signal: req.signal } : {}),
+      });
+  if (!interpreted) {
+    return blockedResult({ message: "待确认任务不存在、已失效或内容校验失败。", source: "resumed", failureCode: "PENDING_TASK_INVALID" });
+  }
+  if (!interpreted.ok) {
+    return blockedResult({ message: interpreted.error, source: "invalid", failureCode: "TASKSPEC_INVALID" });
+  }
+  if (resumed && resumed.projectId !== snapshot.projectId) {
+    return blockedResult({ message: "待确认任务属于另一个项目。", source: "resumed", action: interpreted.spec.action, failureCode: "PROJECT_MISMATCH" });
+  }
+  if (resumed?.selection) {
+    const current = snapshot.selection && snapshot.selectedText !== undefined
+      ? {
+          path: snapshot.activeFile,
+          start: snapshot.selection.start,
+          end: snapshot.selection.end,
+          textHash: artifactTextHash(snapshot.selectedText),
+        }
+      : null;
+    if (
+      !current ||
+      current.path !== resumed.selection.path ||
+      current.start !== resumed.selection.start ||
+      current.end !== resumed.selection.end ||
+      current.textHash !== resumed.selection.textHash
+    ) {
+      return blockedResult({ message: "编辑器选区已变化，请重新发起修改。", source: "resumed", action: interpreted.spec.action, failureCode: "SELECTION_STALE" });
+    }
+  }
   const resolved = resolveTaskContext({ snapshot, model, interpreted });
-  const result = await executeWorkflow({
+  if (resolved.errors.length > 0) {
+    return blockedResult({
+      message: resolved.errors.join(" "),
+      source: resumed ? "resumed" : interpreted.source,
+      action: interpreted.spec.action,
+      targetCount: resolved.targets.length,
+      failureCode: "CONTEXT_UNRESOLVED",
+      notes: resolved.toolNotes,
+    });
+  }
+  const bypassConfirmation = Boolean(resumed || lockedAction);
+  if (resolved.spec.applyMode === "propose-patch" && !bypassConfirmation) {
+    const confirmation = buildPendingFileTask(resolved);
+    const execution: ChatExecution = {
+      schemaVersion: "1",
+      outcome: "confirmation-required",
+      taskSource: interpreted.source,
+      action: resolved.spec.action,
+      targetCount: resolved.targets.length,
+    };
+    return {
+      agent: {
+        schemaVersion: "1",
+        workflow: workflowForAction(resolved.spec.action),
+        summary: "Waiting for file transaction confirmation",
+        warnings: resolved.warnings,
+      },
+      content: confirmationText(confirmation),
+      suggestions: [],
+      toolNotes: [...resolved.toolNotes, "outcome:confirmation-required"],
+      outcome: "confirmation-required",
+      execution,
+      confirmation,
+    };
+  }
+  const result = await execute({
     request: workflowRequestFromTask(req, resolved),
     config: req.config,
     history: req.history,
@@ -172,14 +277,48 @@ export async function runAssistant(req: RuntimeRequest): Promise<RuntimeResult> 
     );
   }
 
+  if (resolved.spec.applyMode === "propose-patch" && !result.agent.patch) {
+    return blockedResult({
+      message: result.agent.warnings.join(" ") || result.content || "修改工作流没有生成可验证的 PatchSet。",
+      source: resumed ? "resumed" : interpreted.source,
+      action: resolved.spec.action,
+      targetCount: resolved.targets.length,
+      failureCode: "PATCH_NOT_PRODUCED",
+      notes: [...resolved.toolNotes, ...result.toolNotes],
+    });
+  }
+  if (resolved.spec.applyMode === "answer-only" && result.agent.patch) {
+    return blockedResult({
+      message: "answer-only 任务意外返回了文件修改。",
+      source: interpreted.source,
+      action: resolved.spec.action,
+      targetCount: resolved.targets.length,
+      failureCode: "UNEXPECTED_PATCH",
+    });
+  }
+
+  const outcome: AssistantOutcomeKind = result.agent.patch ? "patch-proposed" : "answer";
+  const execution: ChatExecution = {
+    schemaVersion: "1",
+    outcome,
+    taskSource: resumed ? "resumed" : interpreted.source,
+    action: resolved.spec.action,
+    targetCount: resolved.targets.length,
+  };
+
   return {
     agent: result.agent,
-    content: result.content,
+    content: result.agent.patch
+      ? `已准备好文件修改，尚未应用。请检查下方 Diff 后选择 Keep。`
+      : result.content,
     suggestions,
     toolNotes: [
       ...result.toolNotes,
       `task-route:${interpreted.source}:${resolved.spec.action}`,
+      `outcome:${outcome}`,
     ],
+    outcome,
+    execution,
     ...(result.lastCompileLog !== undefined
       ? { lastCompileLog: result.lastCompileLog }
       : {}),

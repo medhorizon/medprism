@@ -2,15 +2,15 @@
 
 Medical scientific writing workspace inspired by OpenAI Prism (graphite-on-paper UI, Assistant card under Source).
 
-## Download (v1.5.0)
+## Download (v1.5.1)
 
-Prebuilt desktop apps: [GitHub Releases](https://github.com/medhorizon/medprism/releases/tag/v1.5.0)
+Prebuilt desktop apps: [GitHub Releases](https://github.com/medhorizon/medprism/releases/tag/v1.5.1)
 
 | Platform | Artifact |
 |---|---|
-| Windows x64 | `MedPrism-1.5.0-win64-portable.exe` |
-| Linux x64 | `MedPrism-1.5.0-linux64.AppImage` |
-| macOS Apple Silicon | `MedPrism-1.5.0-macos-arm64.dmg` |
+| Windows x64 | `MedPrism-1.5.1-win64-portable.exe` |
+| Linux x64 | `MedPrism-1.5.1-linux64.AppImage` |
+| macOS Apple Silicon | `MedPrism-1.5.1-macos-arm64.dmg` |
 
 ## Run (development)
 

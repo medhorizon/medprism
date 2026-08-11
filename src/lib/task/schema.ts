@@ -7,6 +7,7 @@ import type {
   TaskEvidenceMode,
   TaskScope,
   TaskSpec,
+  TaskContextSlot,
   TaskTarget,
 } from "./types";
 
@@ -24,9 +25,10 @@ const FORBIDDEN_KEYS = new Set([
 ]);
 const TASK_KEYS = new Set([
   "schemaVersion", "action", "applyMode", "contentMode", "scope",
-  "evidenceMode", "targets",
+  "evidenceMode", "targets", "contextSlots",
 ]);
 const TARGET_KEYS = new Set(["slot", "title", "sourceIds"]);
+const CONTEXT_SLOT_KEYS = new Set(["slot", "title"]);
 
 export type ParseTaskSpecResult =
   | { ok: true; value: TaskSpec }
@@ -84,6 +86,33 @@ function parseTargets(value: unknown, allowedSourceIds: Set<string>): TaskTarget
     });
   }
   return targets;
+}
+
+function parseContextSlots(value: unknown): TaskContextSlot[] | null {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) return null;
+  const slots: TaskContextSlot[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+    const raw = item as Record<string, unknown>;
+    if (Object.keys(raw).some((key) => !CONTEXT_SLOT_KEYS.has(key))) return null;
+    if (typeof raw.slot !== "string") return null;
+    const isCustom = raw.slot === "custom-section";
+    if (!isCustom && !MANUSCRIPT_SLOT_KINDS.has(raw.slot as ManuscriptSlotKind)) return null;
+    if (isCustom && (typeof raw.title !== "string" || !raw.title.trim())) return null;
+    if (!isCustom && raw.title !== undefined) return null;
+    slots.push({
+      slot: raw.slot as TaskContextSlot["slot"],
+      ...(isCustom ? { title: (raw.title as string).trim() } : {}),
+    });
+  }
+  const seen = new Set<string>();
+  return slots.filter((slot) => {
+    const key = slot.slot === "custom-section" ? `custom:${slot.title}` : slot.slot;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 function invariantError(spec: TaskSpec): string | null {
@@ -170,6 +199,8 @@ export function parseTaskSpec(
   if (typeof object.evidenceMode !== "string" || !EVIDENCE_MODES.has(object.evidenceMode as TaskEvidenceMode)) return { ok: false, message: "TaskSpec evidenceMode is invalid" };
   const targets = parseTargets(object.targets, new Set(allowedSourceIds));
   if (!targets) return { ok: false, message: "TaskSpec targets are invalid" };
+  const contextSlots = parseContextSlots(object.contextSlots);
+  if (!contextSlots) return { ok: false, message: "TaskSpec contextSlots are invalid" };
   const spec: TaskSpec = {
     schemaVersion: "2",
     action: action as TaskAction,
@@ -178,6 +209,7 @@ export function parseTaskSpec(
     scope: object.scope as TaskScope,
     evidenceMode: object.evidenceMode as TaskEvidenceMode,
     targets,
+    contextSlots,
   };
   if (options?.requireProposePatch && spec.applyMode !== "propose-patch") {
     return { ok: false, message: "The user explicitly requested a file change; propose-patch is required" };

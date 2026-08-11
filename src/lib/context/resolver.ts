@@ -13,7 +13,7 @@ import type {
   ManuscriptSlotRef,
 } from "../manuscript/types";
 import { validateConversationArtifact } from "../conversationArtifacts";
-import type { SuccessfulInterpretedTask, TaskSpec } from "../task/types";
+import type { SuccessfulInterpretedTask, TaskContextSlot, TaskSpec, TaskTarget } from "../task/types";
 
 export type ResolvedTargetBinding = {
   id: string;
@@ -62,7 +62,7 @@ export type ResolvedClaimCandidate = {
   hasCitation: boolean;
 };
 
-function targetRef(target: TaskSpec["targets"][number]): ManuscriptSlotRef {
+function slotRef(target: TaskTarget | TaskContextSlot): ManuscriptSlotRef {
   return target.slot === "custom-section"
     ? { slot: "custom-section", title: target.title ?? "Section" }
     : { slot: target.slot };
@@ -115,7 +115,15 @@ export function resolveTaskContext(args: {
   const bindings: ResolvedTargetBinding[] = [];
   const ambiguities: ResolvedTargetAmbiguity[] = [];
   const contextBlocks: ResolvedTask["contextBlocks"] = [];
+  const contextBlockIds = new Set<string>();
   let selection: ResolvedSelection | undefined;
+
+  const pushContext = (occurrence: ManuscriptOccurrence) => {
+    const context = contextForOccurrence(occurrence);
+    if (contextBlockIds.has(context.id)) return;
+    contextBlockIds.add(context.id);
+    contextBlocks.push(context);
+  };
 
   if (
     interpreted.spec.scope === "selection" &&
@@ -127,6 +135,7 @@ export function resolveTaskContext(args: {
       range: snapshot.selection,
       text: snapshot.selectedText,
     };
+    contextBlockIds.add("context:selection");
     contextBlocks.push({
       id: "context:selection",
       path: snapshot.activeFile,
@@ -139,7 +148,7 @@ export function resolveTaskContext(args: {
   );
 
   for (const [targetIndex, target] of interpreted.spec.targets.entries()) {
-    const ref = targetRef(target);
+    const ref = slotRef(target);
     const occurrences = occurrencesForSlot(model, ref);
     const selectedOccurrenceId = selectionByTarget.get(targetIndex);
     let occurrence: ManuscriptOccurrence | undefined;
@@ -179,7 +188,7 @@ export function resolveTaskContext(args: {
         providedText,
       };
       bindings.push(binding);
-      contextBlocks.push(contextForOccurrence(occurrence));
+      pushContext(occurrence);
       continue;
     }
 
@@ -201,11 +210,22 @@ export function resolveTaskContext(args: {
     errors.push(`Requested slot ${slotKey(ref)} does not exist in the manuscript.`);
   }
 
+  for (const contextSlot of interpreted.spec.contextSlots ?? []) {
+    const ref = slotRef(contextSlot);
+    const occurrence = canonicalOccurrence(model, ref);
+    if (!occurrence) {
+      warnings.push(`Context slot ${slotKey(ref)} is not available in the active manuscript graph.`);
+      continue;
+    }
+    pushContext(occurrence);
+  }
+
   if (interpreted.spec.targets.length === 0 && !selection) {
     const defaults = defaultDocumentTargets(model);
     if (interpreted.spec.scope === "manuscript" || interpreted.spec.action === "advice") {
-      contextBlocks.push(...defaults.map(contextForOccurrence));
+      defaults.forEach(pushContext);
     } else if (interpreted.spec.scope === "active-file") {
+      contextBlockIds.add("context:active-file");
       contextBlocks.push({
         id: "context:active-file",
         path: snapshot.activeFile,
@@ -260,6 +280,7 @@ export function resolveTaskContext(args: {
       `task-repaired:${interpreted.repaired ? "yes" : "no"}`,
       `context-targets:${bindings.length}`,
       `context-slots:${bindings.map((binding) => slotKey(binding.ref)).join(",") || "none"}`,
+      `context-source-slots:${(interpreted.spec.contextSlots ?? []).map((slot) => slotKey(slotRef(slot))).join(",") || "none"}`,
       `context-selection:${selection ? "yes" : "no"}`,
     ],
   };

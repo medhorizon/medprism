@@ -106,6 +106,43 @@ describe("TaskSpec v2 interpreter", () => {
     });
   });
 
+  it("separates source context slots from write targets", async () => {
+    const userText = "基于标题写一个引言";
+    const sources = buildConversationArtifacts({ messageId: "u1", role: "user", content: userText });
+    const interpreted = await interpretTaskSpec({
+      config: { mode: "mock" },
+      userText,
+      history: [],
+      model: await model(),
+      sources,
+      complete: async <T>(args: Parameters<typeof completeStructured<T>>[0]) => {
+        expect(args.messages[0]?.content).toContain("Use targets only for slots that will be modified");
+        const raw = JSON.stringify({
+          schemaVersion: "2",
+          action: "draft",
+          applyMode: "propose-patch",
+          contentMode: "generate",
+          scope: "targets",
+          evidenceMode: "none",
+          targets: [{ slot: "introduction", sourceIds: [] }],
+          contextSlots: [{ slot: "title" }],
+        });
+        const parsed = args.parse(raw);
+        if (!parsed.ok) return { ok: false as const, message: parsed.message, raw };
+        return { ok: true as const, value: parsed.value as T, raw, repaired: false };
+      },
+    });
+    expect(interpreted).toMatchObject({
+      ok: true,
+      spec: {
+        action: "draft",
+        applyMode: "propose-patch",
+        targets: [{ slot: "introduction", sourceIds: [] }],
+        contextSlots: [{ slot: "title" }],
+      },
+    });
+  });
+
   it("blocks assisted-writing classification failures instead of silently turning them into chat", async () => {
     const userText = "请帮我补充讨论部分";
     const sources = buildConversationArtifacts({ messageId: "u1", role: "user", content: userText });

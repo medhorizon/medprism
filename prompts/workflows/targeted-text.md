@@ -25,6 +25,7 @@ Rules:
 
 - Treat `workspace_context.textTarget.slotTemplate` as authoritative template guidance.
 - Use `slotTemplate.semanticSlot`, `slotTemplate.profile`, `slotTemplate.wrapperPreview`, and `slotTemplate.rules` to make the content fit the active journal template.
+- Use `workspace_context.manuscriptContext` as read-only source material when present; never modify those context slots unless they are also the active textTarget.
 - Return `textDraft.text` as slot body content only. The runtime will add or preserve the LaTeX wrapper shown in `slotTemplate.wrapperPreview`.
 - Return only the target body, not the heading, `\section`, `\abstract`, environment wrapper, or whole file.
 - Follow the runtime-provided `preferredFormat`.

@@ -231,6 +231,73 @@ describe("workflow executor", () => {
     }
   });
 
+  it("passes read-only source slot context to the writing model while editing only the target slot", async () => {
+    const source = [
+      "\\documentclass{article}",
+      "\\begin{document}",
+      "\\title{Single-Cell NMF Patterns for HCC Early Detection}",
+      "\\section{Introduction}", "Old introduction.",
+      "\\end{document}",
+    ].join("\n");
+    const ctx = context({ source });
+    const snapshot = await buildContextSnapshot(ctx);
+    const resolvedTask = resolveTaskContext({
+      snapshot,
+      model: buildManuscriptModel(snapshot),
+      interpreted: {
+        ok: true,
+        spec: {
+          schemaVersion: "2",
+          action: "draft",
+          applyMode: "propose-patch",
+          contentMode: "generate",
+          scope: "targets",
+          evidenceMode: "none",
+          targets: [{ slot: "introduction", sourceIds: [] }],
+          contextSlots: [{ slot: "title" }],
+        },
+        sources: [],
+        source: "llm",
+        repaired: false,
+      },
+    });
+    let modelMessages: Array<{ role: string; content: string }> = [];
+    const result = await executeWorkflow({
+      request: {
+        kind: "writing",
+        userText: "基于标题写一个引言",
+        resolvedTask,
+        plan: { primary: "writing", steps: ["writing", "latex-apply"], applyToLatex: true },
+      },
+      config,
+      history: [],
+      ctx,
+    }, services({
+      modelResponses: [JSON.stringify({
+        schemaVersion: "1",
+        workflow: "writing",
+        summary: "Draft introduction",
+        warnings: [],
+        textDraft: {
+          text: "Hepatocellular carcinoma remains a major clinical challenge for early detection.",
+          format: "plain-text",
+          sourceCandidateIds: [],
+        },
+      })],
+      onMessages: (messages) => { modelMessages = messages; },
+    }));
+    const workspace = taggedJson(modelMessages, "workspace_context");
+    expect(workspace.manuscriptContext.some((block: { text: string }) =>
+      block.text.includes("Single-Cell NMF Patterns"),
+    )).toBe(true);
+    expect(result.agent.patch?.operations).toHaveLength(1);
+    expect(result.agent.patch?.operations[0]).toMatchObject({
+      op: "replace_text",
+      path: "main.tex",
+      oldText: "\nOld introduction.\n",
+    });
+  });
+
   it("rejects slot drafts that return LaTeX wrappers instead of template body text", async () => {
     const source = "\\documentclass{article}\n\\begin{document}\n\\section{Introduction}\nText.\n\\end{document}";
     const ctx = context({ source });

@@ -159,6 +159,7 @@ export function runtimeFallbackTask(args: {
       scope: args.selectionAvailable ? "selection" : "manuscript",
       evidenceMode: "none",
       targets: [],
+      contextSlots: [],
     };
     return { ok: true, spec, sources: args.sources, source: "runtime", repaired: args.repaired ?? true };
   }
@@ -201,6 +202,7 @@ export function runtimeFallbackTask(args: {
     scope,
     evidenceMode: action === "cite" ? "literature" : "none",
     targets,
+    contextSlots: [],
   };
   return { ok: true, spec, sources: args.sources, source: "runtime", repaired: args.repaired ?? true };
 }

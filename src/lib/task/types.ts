@@ -29,6 +29,11 @@ export type TaskTarget = {
   sourceIds: string[];
 };
 
+export type TaskContextSlot = {
+  slot: ManuscriptSlotKind | "custom-section";
+  title?: string;
+};
+
 export type TaskSpec = {
   schemaVersion: "2";
   action: TaskAction;
@@ -37,6 +42,7 @@ export type TaskSpec = {
   scope: TaskScope;
   evidenceMode: TaskEvidenceMode;
   targets: TaskTarget[];
+  contextSlots?: TaskContextSlot[];
 };
 
 export type InterpretedTask = {

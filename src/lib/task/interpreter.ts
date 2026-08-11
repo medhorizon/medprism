@@ -29,7 +29,8 @@ Return exactly this JSON shape (all fields are required):
   "contentMode": "none | generate | provided | blank",
   "scope": "selection | targets | active-file | manuscript | compile-log",
   "evidenceMode": "none | literature",
-  "targets": [{ "slot": "a supplied semantic slot", "sourceIds": ["supplied artifact id"] }]
+  "targets": [{ "slot": "a supplied semantic slot", "sourceIds": ["supplied artifact id"] }],
+  "contextSlots": [{ "slot": "a supplied semantic slot used only as read-only context" }]
 }
 
 Actions:
@@ -45,6 +46,7 @@ Actions:
 The runtime may supply authoritativeApplyMode. When it is "answer-only" or "propose-patch", echo it exactly.
 When authoritativeApplyMode is null, decide applyMode from the assisted-writing policy below.
 The model never grants physical file permission: it only classifies intent, selects semantic slots, and cites runtime source IDs.
+Use targets only for slots that will be modified. Use contextSlots for manuscript slots that should be read as source context.
 
 Required invariants:
 - advice/review/research => applyMode answer-only
@@ -56,9 +58,11 @@ Required invariants:
 - scaffold => propose-patch + blank + evidenceMode none
 - fill-sections => propose-patch + provided; it places exact source text into any semantic slot, including title
 - cite => propose-patch + literature
+- contextSlots are read-only; they never create or modify files and never require sourceIds
 
 Use fill-sections when the user supplies the exact replacement text, including commands such as "change the title to X".
 Use draft only when new prose must be generated. Brainstorming, comparison, questions, and requests for candidate titles are advice until the user explicitly asks to apply one.
+For requests like "based on the title, write an introduction", target only the destination slot (introduction) and put title in contextSlots.
 Targets use sourceIds copied from the supplied runtime artifact catalog. A source may come from the current user message or a prior assistant candidate. Never repeat source text in JSON.
 
 ${assistedWritingPolicy}
@@ -68,6 +72,7 @@ Examples:
 - "rewrite this title in English" => polish + answer-only + manuscript + []
 - "change the title to X" => fill-sections + propose-patch + targets + title sourceIds
 - "please help draft the abstract" => draft + propose-patch + targets + abstract + []
+- "based on the title, write the introduction" => draft + propose-patch + targets + introduction + contextSlots title
 - locked polish with no selection => polish + propose-patch + manuscript + []
 
 Return JSON only.`;

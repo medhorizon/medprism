@@ -29,6 +29,42 @@ describe("semantic Context Resolver", () => {
     expect(resolved.targets[0]?.occurrence?.body).toContain("Claim");
   });
 
+  it("keeps source context slots read-only when a different slot is the edit target", async () => {
+    const source = [
+      "\\documentclass{article}",
+      "\\begin{document}",
+      "\\title{Runtime Title}",
+      "\\section{Introduction}", "Old introduction.",
+      "\\end{document}",
+    ].join("\n");
+    const snapshot = await buildContextSnapshot({ projectId: "p", files: { "main.tex": source }, mainFile: "main.tex" });
+    const model = buildManuscriptModel(snapshot);
+    const resolved = resolveTaskContext({
+      snapshot,
+      model,
+      interpreted: {
+        spec: {
+          schemaVersion: "2",
+          action: "draft",
+          applyMode: "propose-patch",
+          contentMode: "generate",
+          scope: "targets",
+          evidenceMode: "none",
+          targets: [{ slot: "introduction", sourceIds: [] }],
+          contextSlots: [{ slot: "title" }],
+        },
+        ok: true,
+        sources: [],
+        source: "llm",
+        repaired: false,
+      },
+    });
+    expect(resolved.errors).toEqual([]);
+    expect(resolved.targets.map((target) => target.ref.slot)).toEqual(["introduction"]);
+    expect(resolved.contextBlocks.some((block) => block.text.includes("Runtime Title"))).toBe(true);
+    expect(resolved.toolNotes).toContain("context-source-slots:title");
+  });
+
   it("binds exact user segment text without model repetition", async () => {
     const source = "\\documentclass{article}\n\\begin{document}\n\\section*{Funding}\nOld.\n\\end{document}";
     const userText = "Funding This work was supported by Grant 1.";

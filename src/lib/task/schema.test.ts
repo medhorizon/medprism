@@ -29,6 +29,39 @@ describe("TaskSpec v2 schema", () => {
     expect(parsed.ok).toBe(true);
   });
 
+  it("accepts read-only context slots separately from mutation targets", () => {
+    const parsed = parseTaskSpec(JSON.stringify({
+      schemaVersion: "2",
+      action: "draft",
+      applyMode: "propose-patch",
+      contentMode: "generate",
+      scope: "targets",
+      evidenceMode: "none",
+      targets: [{ slot: "introduction", sourceIds: [] }],
+      contextSlots: [{ slot: "title" }],
+    }), sources);
+    expect(parsed.ok).toBe(true);
+    if (parsed.ok) {
+      expect(parsed.value.targets.map((target) => target.slot)).toEqual(["introduction"]);
+      expect(parsed.value.contextSlots).toEqual([{ slot: "title" }]);
+    }
+  });
+
+  it("rejects physical fields inside context slots", () => {
+    const parsed = parseTaskSpec(JSON.stringify({
+      schemaVersion: "2",
+      action: "draft",
+      applyMode: "propose-patch",
+      contentMode: "generate",
+      scope: "targets",
+      evidenceMode: "none",
+      targets: [{ slot: "introduction", sourceIds: [] }],
+      contextSlots: [{ slot: "title", range: { start: 0, end: 10 } }],
+    }), sources);
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) expect(parsed.message).toContain("forbidden");
+  });
+
   it("rejects physical patch fields anywhere in the response", () => {
     const parsed = parseTaskSpec(JSON.stringify({
       schemaVersion: "2",

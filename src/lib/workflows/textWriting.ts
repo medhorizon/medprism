@@ -176,6 +176,11 @@ export async function runTargetedTextWorkflow(args: {
         'trust="untrusted-data"',
         {
           activeFile: snapshot.activeFile,
+          manuscriptContext: (input.request.resolvedTask?.contextBlocks ?? []).map((context) => ({
+            id: context.id,
+            path: context.path,
+            text: context.text.slice(0, 8_000),
+          })),
           textTarget: {
             kind: target.kind,
             path: target.path,

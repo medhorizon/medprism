@@ -16,6 +16,45 @@ import {
 import type { ConversationArtifact } from "../../types/chat";
 import type { InterpretedTask, TaskAction, TaskSpec } from "./types";
 
+const REQUEST_DECISION_LIST = [
+  {
+    id: "pure-advice",
+    applyMode: "answer-only",
+    actions: ["advice", "review", "research"],
+    description: "The user asks a question, requests critique, explores options, or explicitly says not to modify files.",
+  },
+  {
+    id: "conversational-draft-or-polish",
+    applyMode: "answer-only",
+    actions: ["draft", "polish"],
+    description: "The user wants generated or rewritten text in chat only, such as title ideas or an English rewrite, without asking MedPrism to apply it to the project.",
+  },
+  {
+    id: "provided-text-file-transaction",
+    applyMode: "propose-patch",
+    actions: ["fill-sections"],
+    description: "The user supplies or references exact text to set, adopt, replace, write into, or fill into a manuscript slot.",
+  },
+  {
+    id: "generated-text-file-transaction",
+    applyMode: "propose-patch",
+    actions: ["draft", "polish"],
+    description: "The user asks MedPrism to write, revise, continue, expand, translate, polish, or regenerate manuscript content for the project.",
+  },
+  {
+    id: "latex-cleanup-or-repair",
+    applyMode: "propose-patch",
+    actions: ["latex", "compile-fix"],
+    description: "The user asks to repair LaTeX, remove Markdown-like formatting from source, clean compiled-visible formatting artifacts, or fix a compile diagnostic.",
+  },
+  {
+    id: "citation-file-transaction",
+    applyMode: "propose-patch",
+    actions: ["cite"],
+    description: "The user asks to add, check, or ground manuscript claims with verified literature citations.",
+  },
+] as const;
+
 const TASK_SYSTEM = `You are MedPrism's semantic task interpreter.
 Map the user's natural-language request to exactly one TaskSpec JSON object.
 You may only use runtime-provided message segment IDs and semantic manuscript slots.
@@ -44,7 +83,7 @@ Actions:
 - latex/compile-fix: structural or diagnostic source repair
 
 The runtime may supply authoritativeApplyMode. When it is "answer-only" or "propose-patch", echo it exactly.
-When authoritativeApplyMode is null, decide applyMode from the assisted-writing policy below.
+When authoritativeApplyMode is null, decide applyMode from the request decision list and the base policy markdown below.
 The model never grants physical file permission: it only classifies intent, selects semantic slots, and cites runtime source IDs.
 Use targets only for slots that will be modified. Use contextSlots for manuscript slots that should be read as source context.
 
@@ -65,6 +104,10 @@ Use draft only when new prose must be generated. Brainstorming, comparison, ques
 For requests like "based on the title, write an introduction", target only the destination slot (introduction) and put title in contextSlots.
 Targets use sourceIds copied from the supplied runtime artifact catalog. A source may come from the current user message or a prior assistant candidate. Never repeat source text in JSON.
 
+Request decision list:
+${JSON.stringify(REQUEST_DECISION_LIST, null, 2)}
+
+Base policy markdown:
 ${assistedWritingPolicy}
 
 Examples:
@@ -137,6 +180,8 @@ export async function interpretTaskSpec(args: {
         authoritativeApplyMode: policy.allowLlmApplyMode ? null : policy.applyMode,
         allowedApplyModes: policy.allowLlmApplyMode ? ["answer-only", "propose-patch"] : [policy.applyMode],
         permissionReason: policy.reason,
+        requestDecisionList: REQUEST_DECISION_LIST,
+        basePolicyMarkdown: policy.allowLlmApplyMode ? assistedWritingPolicy : undefined,
         currentUserText: args.userText,
         uiSelectionAvailable: args.selectionAvailable === true,
         sourceArtifacts: sources.map(({ id, messageId, role, kind, text }) => ({ id, messageId, role, kind, text })),

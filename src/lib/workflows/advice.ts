@@ -1,4 +1,3 @@
-import scientificWritingSkill from "../../../skills/scientific-writing/SKILL.md?raw";
 import { taggedPromptData } from "../promptData";
 import { emptyAgentResult, type WorkflowHandler, type WorkflowResult } from "./types";
 
@@ -39,7 +38,6 @@ export const runAdviceWorkflow: WorkflowHandler = async (input) => {
           "Answer the user directly in plain text. Never propose, describe, or encode file patches.",
           "Preserve claim strength and never invent data, citations, journal policies, DOI, or PMID.",
           "If the user asks for current journal submission requirements, explain that no official guideline retrieval was performed and that requirements must be verified against the journal website.",
-          scientificWritingSkill,
         ].join("\n\n"),
       },
       ...input.history,

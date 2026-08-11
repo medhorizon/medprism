@@ -44,7 +44,7 @@ const SLOT_PATTERNS: ReadonlyArray<[ManuscriptSlotKind, RegExp]> = [
 
 export type RuntimeTaskPolicy = {
   applyMode: TaskApplyMode;
-  reason: "locked-action" | "explicit-file-intent" | "explicit-answer-intent" | "writing-assist-llm" | "safe-default";
+  reason: "locked-action" | "explicit-file-intent" | "explicit-answer-intent" | "fuzzy-llm";
   allowLlmApplyMode: boolean;
 };
 
@@ -66,9 +66,10 @@ export function requestsWritingAssistance(text: string): boolean {
 
 /**
  * File permission is runtime-owned. Clear UI/slash actions and explicit commit
- * speech acts are still authoritative. Ambiguous assisted-writing requests are
- * sent to the TaskSpec interpreter so the model can classify conversation vs a
- * semantic file transaction, while runtime still owns ranges and PatchSets.
+ * speech acts are still authoritative. Every other fuzzy request is sent to the
+ * TaskSpec interpreter with the runtime decision list and policy markdown so the
+ * model classifies conversation vs semantic file transaction, while runtime
+ * still owns ranges and PatchSets.
  */
 export function runtimeTaskPolicy(args: {
   userText: string;
@@ -87,10 +88,7 @@ export function runtimeTaskPolicy(args: {
   if (requestsFileCommit(args.userText)) {
     return { applyMode: "propose-patch", reason: "explicit-file-intent", allowLlmApplyMode: false };
   }
-  if (requestsWritingAssistance(args.userText)) {
-    return { applyMode: "answer-only", reason: "writing-assist-llm", allowLlmApplyMode: true };
-  }
-  return { applyMode: "answer-only", reason: "safe-default", allowLlmApplyMode: false };
+  return { applyMode: "answer-only", reason: "fuzzy-llm", allowLlmApplyMode: true };
 }
 
 function namedSlot(text: string): ManuscriptSlotKind | undefined {

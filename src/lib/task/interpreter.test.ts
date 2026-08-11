@@ -4,6 +4,7 @@ import { buildConversationArtifacts } from "../conversationArtifacts";
 import { buildManuscriptModel } from "../manuscript/model";
 import type { completeStructured } from "../llmClient";
 import { interpretTaskSpec, requestsFileCommit, requestsWritingAssistance } from "./interpreter";
+import { runtimeTaskPolicy } from "./policy";
 
 async function model() {
   const snapshot = await buildContextSnapshot({
@@ -102,6 +103,55 @@ describe("TaskSpec v2 interpreter", () => {
         applyMode: "propose-patch",
         contentMode: "generate",
         targets: [{ slot: "abstract", sourceIds: [] }],
+      },
+    });
+  });
+
+  it("sends fuzzy requests to the TaskSpec model with a decision list and base markdown", async () => {
+    const userText = "用纯文本给我重新修正latex";
+    const policy = runtimeTaskPolicy({ userText });
+    expect(policy).toMatchObject({
+      applyMode: "answer-only",
+      reason: "fuzzy-llm",
+      allowLlmApplyMode: true,
+    });
+    const interpreted = await interpretTaskSpec({
+      config: { mode: "mock" },
+      userText,
+      history: [],
+      model: await model(),
+      sources: buildConversationArtifacts({ messageId: "u1", role: "user", content: userText }),
+      complete: async <T>(args: Parameters<typeof completeStructured<T>>[0]) => {
+        const payload = JSON.parse(args.messages.at(-1)?.content ?? "{}");
+        expect(payload.authoritativeApplyMode).toBeNull();
+        expect(payload.allowedApplyModes).toEqual(["answer-only", "propose-patch"]);
+        expect(payload.permissionReason).toBe("fuzzy-llm");
+        expect(payload.requestDecisionList.some((item: { id: string }) => item.id === "latex-cleanup-or-repair")).toBe(true);
+        expect(payload.basePolicyMarkdown).toContain("Assisted writing TaskSpec policy");
+        expect(args.messages[0]?.content).toContain("Request decision list");
+        expect(args.messages[0]?.content).toContain("Base policy markdown");
+        const raw = JSON.stringify({
+          schemaVersion: "2",
+          action: "latex",
+          applyMode: "propose-patch",
+          contentMode: "none",
+          scope: "targets",
+          evidenceMode: "none",
+          targets: [{ slot: "introduction", sourceIds: [] }],
+          contextSlots: [],
+        });
+        const parsed = args.parse(raw);
+        if (!parsed.ok) return { ok: false as const, message: parsed.message, raw };
+        return { ok: true as const, value: parsed.value as T, raw, repaired: false };
+      },
+    });
+    expect(interpreted).toMatchObject({
+      ok: true,
+      source: "llm",
+      spec: {
+        action: "latex",
+        applyMode: "propose-patch",
+        targets: [{ slot: "introduction", sourceIds: [] }],
       },
     });
   });

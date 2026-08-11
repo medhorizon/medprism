@@ -50,6 +50,7 @@ describe("semantic advice workflow", () => {
     expect(result.agent.patch).toBeUndefined();
     expect(complete).toHaveBeenCalledOnce();
     expect(complete.mock.calls[0]?.[0]?.stream).not.toBe(false);
+    expect(complete.mock.calls[0]?.[0]?.messages[0]?.content).not.toContain("source: davila7");
   });
 
   it("adds a deterministic time-sensitivity warning for current journal policy advice", async () => {

@@ -40,6 +40,7 @@ import {
   setSessionChat,
   shutdownProjectChats,
   startProjectAssistant,
+  stopProjectAssistant,
   subscribeProjectChat,
 } from "../state/projectChatSession";
 import {
@@ -416,7 +417,8 @@ export function WorkspacePage() {
       return null;
     }
 
-    const cached = loadProjectPdf(current.id);
+    const currentRevision = await projectRevision(current.files);
+    const cached = loadProjectPdf(current.id, localStorage, currentRevision);
     if (!cached?.pdfBase64) return null;
     const mainFile = mainFileFor(current);
     const attached = withCompiledPdfFiles(
@@ -961,6 +963,12 @@ export function WorkspacePage() {
                 draft={draft}
                 onDraftChange={setDraft}
                 onSend={(text) => void send(text)}
+                onStop={() => {
+                  const current = projectRef.current;
+                  if (!current) return;
+                  stopProjectAssistant(current.id, interruptedLabelRef.current);
+                  setSending(false);
+                }}
                 quickPrompts={quickPrompts}
                 onKeep={(message) => void keepSuggestion(message)}
                 onUndo={(message) => void undoSuggestion(message)}

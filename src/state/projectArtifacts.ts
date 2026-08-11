@@ -434,6 +434,7 @@ export function saveProjectChat(
 export function loadProjectPdf(
   projectId: string,
   storage: StorageLike = localStorage,
+  expectedFilesRevision?: string,
 ): StoredProjectPdf | null {
   if (!projectId.trim()) return null;
   try {
@@ -448,6 +449,9 @@ export function loadProjectPdf(
       !parsed.pdfBase64 ||
       typeof parsed.updatedAt !== "string"
     ) {
+      return null;
+    }
+    if (expectedFilesRevision && parsed.filesRevision !== expectedFilesRevision) {
       return null;
     }
     return {

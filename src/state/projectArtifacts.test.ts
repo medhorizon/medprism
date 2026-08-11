@@ -63,6 +63,7 @@ describe("projectArtifacts", () => {
       pdfBase64: "JVBERi0x",
       updatedAt: expect.any(String),
     });
+    expect(loadProjectPdf("proj-1", storage, "different-revision")).toBeNull();
   });
 
   it("round-trips optional project memory notes", () => {

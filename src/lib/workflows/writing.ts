@@ -1,8 +1,3 @@
-import academicPaperSkill from "../../../skills/academic-paper/SKILL.md?raw";
-import latexPaperEnSkill from "../../../skills/latex-paper-en/SKILL.md?raw";
-import naturePolishingSkill from "../../../skills/nature-polishing/SKILL.md?raw";
-import natureWritingSkill from "../../../skills/nature-writing/SKILL.md?raw";
-import scientificWritingSkill from "../../../skills/scientific-writing/SKILL.md?raw";
 import {
   buildContextSnapshot,
   formatWorkspaceContext,
@@ -32,6 +27,7 @@ import {
 } from "./types";
 
 const WRITING_KINDS = new Set<WorkflowKind>(["writing", "polish", "latex"]);
+const SKILLS_DISABLED_TEXT = "";
 
 function latexKindForResolved(ref: ResolvedTask["targets"][number]["ref"]): ResolvedLatexTarget["kind"] {
   if (ref.slot === "custom-section") return "section";
@@ -237,17 +233,17 @@ export function selectedWritingSkill(input: WorkflowExecutionInput): {
   text: string;
 } {
   if (input.request.kind === "polish") {
-    return { id: "nature-polishing", text: naturePolishingSkill };
+    return { id: "skills-disabled:nature-polishing", text: SKILLS_DISABLED_TEXT };
   }
   if (input.request.kind === "latex") {
-    return { id: "latex-paper-en", text: latexPaperEnSkill };
+    return { id: "skills-disabled:latex-paper-en", text: SKILLS_DISABLED_TEXT };
   }
   if (isNatureWritingRequest(input.request.userText)) {
-    return { id: "nature-writing", text: natureWritingSkill };
+    return { id: "skills-disabled:nature-writing", text: SKILLS_DISABLED_TEXT };
   }
   return detectWritingDomain(input.request.userText, projectHint(input)) === "general"
-    ? { id: "academic-paper", text: academicPaperSkill }
-    : { id: "scientific-writing", text: scientificWritingSkill };
+    ? { id: "skills-disabled:academic-paper", text: SKILLS_DISABLED_TEXT }
+    : { id: "skills-disabled:scientific-writing", text: SKILLS_DISABLED_TEXT };
 }
 
 function invalidModelResult(

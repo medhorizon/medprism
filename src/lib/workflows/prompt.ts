@@ -40,13 +40,22 @@ export function buildWorkflowSystemPrompt(args: {
   const capabilityBlocks = [...new Set(args.capabilities ?? [])].map(
     (capability) => CAPABILITY_INSTRUCTIONS[capability].trim(),
   );
+  const selectedSkillBlock = args.skill.trim()
+    ? [
+        `# Selected skill: ${args.skillId}`,
+        args.skill.trim(),
+        "# Precedence",
+        "The base policy and active workflow instruction override conflicting examples in the selected skill.",
+      ]
+    : [
+        `# Selected skill: ${args.skillId}`,
+        "# Skills disabled",
+        "No external skill document is loaded for this workflow. Use only the base policy, active workflow instruction, runtime context, and typed schemas.",
+      ];
   return [
     basePolicy.trim(),
     (args.instruction ?? WORKFLOW_INSTRUCTIONS[args.workflow]).trim(),
     ...capabilityBlocks,
-    `# Selected skill: ${args.skillId}`,
-    args.skill.trim(),
-    "# Precedence",
-    "The base policy and active workflow instruction override conflicting examples in the selected skill.",
+    ...selectedSkillBlock,
   ].join("\n\n");
 }

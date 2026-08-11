@@ -1,4 +1,3 @@
-import fixCompileSkill from "../../../skills/fix-compile-errors/SKILL.md?raw";
 import { buildContextSnapshot, type ContextSnapshot } from "../context/snapshot";
 import { parseModelPatchProposal, type ModelPatchProposal, type PatchSet, type SourceRange } from "../patch/schema";
 import { parseModelWorkflowEnvelope } from "../replyParse";
@@ -8,6 +7,8 @@ import type { CompileLogError } from "../../tools/types";
 import { finalizeModelPatchProposal } from "./latexApply";
 import { buildWorkflowSystemPrompt } from "./prompt";
 import { emptyAgentResult, type WorkflowHandler, type WorkflowResult } from "./types";
+
+const SKILLS_DISABLED_TEXT = "";
 
 export type CompileFixPreparation =
   | {
@@ -298,8 +299,8 @@ export const runCompileFixWorkflow: WorkflowHandler = async (input) => {
         role: "system",
         content: buildWorkflowSystemPrompt({
           workflow: "compile-fix",
-          skillId: "fix-compile-errors",
-          skill: fixCompileSkill,
+          skillId: "skills-disabled:fix-compile-errors",
+          skill: SKILLS_DISABLED_TEXT,
         }),
       },
       { role: "user", content: prepared.prompt },

@@ -1,4 +1,3 @@
-import academicPaperReviewerSkill from "../../../skills/academic-paper-reviewer/SKILL.md?raw";
 import { assertSafeProjectRelativePath } from "../projectPath";
 import { taggedPromptData } from "../promptData";
 import { compactPaperHits } from "../research/service";
@@ -17,6 +16,7 @@ import {
 
 const REVIEW_TOTAL_LIMIT = 30_000;
 const REVIEW_FILE_LIMIT = 12_000;
+const SKILLS_DISABLED_TEXT = "";
 const SEVERITIES = new Set<ReviewSeverity>(["major", "moderate", "minor"]);
 const CATEGORIES = new Set<ReviewCategory>([
   "scientific",
@@ -226,8 +226,8 @@ export const runReviewWorkflow: WorkflowHandler = async (input) => {
         role: "system",
         content: buildWorkflowSystemPrompt({
           workflow: "review",
-          skillId: "academic-paper-reviewer",
-          skill: academicPaperReviewerSkill,
+          skillId: "skills-disabled:academic-paper-reviewer",
+          skill: SKILLS_DISABLED_TEXT,
           capabilities: input.research ? ["research"] : [],
         }),
       },

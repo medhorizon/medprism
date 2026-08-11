@@ -1,5 +1,3 @@
-import natureCitationSkill from "../../../skills/nature-citation/SKILL.md?raw";
-import naturePolishingSkill from "../../../skills/nature-polishing/SKILL.md?raw";
 import { buildContextSnapshot, formatWorkspaceContext, type ContextSnapshot } from "../context/snapshot";
 import { sha256Hex } from "../patch/hash";
 import { taggedPromptData } from "../promptData";
@@ -37,6 +35,8 @@ export type { CitationJudgement, CitationPlan, CitationRelation } from "./types"
 export type CitationWorkflowResult =
   | { ok: true; plan: CitationPlan; patchSet?: PatchSet }
   | { ok: false; error: PatchValidationError };
+
+const SKILLS_DISABLED_TEXT = "";
 
 export {
   discoverBibliographyPaths,
@@ -275,8 +275,8 @@ async function optionalProseRevision(
         role: "system",
         content: buildWorkflowSystemPrompt({
           workflow: "polish",
-          skillId: "nature-polishing",
-          skill: naturePolishingSkill,
+          skillId: "skills-disabled:nature-polishing",
+          skill: SKILLS_DISABLED_TEXT,
           capabilities: ["research", "latex-output"],
         }),
       },
@@ -338,8 +338,8 @@ export const runCitationWorkflow: WorkflowHandler = async (input) => {
         role: "system",
         content: buildWorkflowSystemPrompt({
           workflow: "citation",
-          skillId: "nature-citation",
-          skill: natureCitationSkill,
+          skillId: "skills-disabled:nature-citation",
+          skill: SKILLS_DISABLED_TEXT,
           capabilities: ["research", "latex-output"],
         }),
       },

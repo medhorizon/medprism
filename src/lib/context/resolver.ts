@@ -5,7 +5,7 @@ import {
   occurrencesForSlot,
 } from "../manuscript/model";
 import { planSlotInsertion } from "../manuscript/profiles";
-import { slotKey } from "../manuscript/slots";
+import { displayHeading, normalizeHeading, SLOT_DEFINITIONS, slotKey } from "../manuscript/slots";
 import type {
   ManuscriptInsertion,
   ManuscriptModel,
@@ -92,6 +92,127 @@ function mostSpecificSources<T extends { messageId: string; start: number; end: 
   );
 }
 
+function orderedSources<T extends { messageId: string; start: number; end: number }>(sources: T[]): T[] {
+  return [...sources].sort((a, b) =>
+    a.messageId.localeCompare(b.messageId) || a.start - b.start || a.end - b.end,
+  );
+}
+
+function sourceSetKey(ids: readonly string[]): string {
+  return [...new Set(ids)].sort().join("\n");
+}
+
+function aliasesForRef(ref: ManuscriptSlotRef): string[] {
+  if (ref.slot === "custom-section") return [ref.title];
+  const definition = SLOT_DEFINITIONS.find((candidate) => candidate.slot === ref.slot);
+  return [
+    displayHeading(ref),
+    ref.slot.replace(/-/g, " "),
+    ...(definition?.aliases ?? []),
+  ].filter((alias, index, aliases) =>
+    alias.trim() && aliases.findIndex((candidate) =>
+      normalizeHeading(candidate) === normalizeHeading(alias),
+    ) === index,
+  );
+}
+
+function escapedAliasPattern(alias: string): string {
+  return alias
+    .trim()
+    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    .replace(/\s+/g, "\\s+");
+}
+
+function labeledLineBody(line: string, ref: ManuscriptSlotRef): string | null {
+  const aliases = aliasesForRef(ref).sort((a, b) => b.length - a.length);
+  for (const alias of aliases) {
+    const pattern = new RegExp(
+      `^\\s*(?:#{1,6}\\s*)?(?:[-+*]\\s*)?${escapedAliasPattern(alias)}(?:\\b|\\s|[:：])\\s*(?:[:：\\-–—]\\s*)?(.*)$`,
+      "iu",
+    );
+    const match = line.match(pattern);
+    if (!match) continue;
+    const body = (match[1] ?? "").trim();
+    return body;
+  }
+  return null;
+}
+
+function splitLabeledText(
+  text: string,
+  refs: ManuscriptSlotRef[],
+): Map<number, string> | null {
+  const buckets = new Map<number, string[]>();
+  let current: number | null = null;
+  for (const rawLine of text.replace(/\r\n?/g, "\n").split("\n")) {
+    const line = rawLine.trimEnd();
+    const matched = refs
+      .map((ref, index) => ({ index, body: labeledLineBody(line, ref) }))
+      .find((candidate) => candidate.body !== null);
+    if (matched) {
+      current = matched.index;
+      buckets.set(current, [
+        ...(buckets.get(current) ?? []),
+        matched.body ?? "",
+      ]);
+      continue;
+    }
+    if (current !== null) {
+      buckets.set(current, [...(buckets.get(current) ?? []), line]);
+    }
+  }
+  const result = new Map<number, string>();
+  for (let index = 0; index < refs.length; index += 1) {
+    const body = (buckets.get(index) ?? []).join("\n").trim();
+    if (!body) return null;
+    result.set(index, body);
+  }
+  return result;
+}
+
+function planProvidedTextBindings(
+  interpreted: SuccessfulInterpretedTask,
+): { texts: Map<number, string>; errors: string[] } {
+  const texts = new Map<number, string>();
+  const errors: string[] = [];
+  if (interpreted.spec.action !== "fill-sections" || interpreted.spec.targets.length <= 1) {
+    return { texts, errors };
+  }
+  const groups = new Map<string, number[]>();
+  interpreted.spec.targets.forEach((target, targetIndex) => {
+    const key = sourceSetKey(target.sourceIds);
+    if (!key) return;
+    groups.set(key, [...(groups.get(key) ?? []), targetIndex]);
+  });
+  for (const targetIndexes of groups.values()) {
+    if (targetIndexes.length <= 1) continue;
+    const sourceIds = new Set(interpreted.spec.targets[targetIndexes[0]!]!.sourceIds);
+    const selectedSources = interpreted.sources.filter((source) => sourceIds.has(source.id));
+    const invalidSource = selectedSources.find((source) => !validateConversationArtifact(source));
+    if (invalidSource || selectedSources.length !== sourceIds.size) continue;
+    const specificSources = orderedSources(mostSpecificSources(selectedSources));
+    const refs = targetIndexes.map((targetIndex) => slotRef(interpreted.spec.targets[targetIndex]!));
+    if (specificSources.length === targetIndexes.length) {
+      for (const [offset, targetIndex] of targetIndexes.entries()) {
+        texts.set(targetIndex, specificSources[offset]!.text);
+      }
+      continue;
+    }
+    const combined = specificSources.map((source) => source.text).join("\n");
+    const labeled = splitLabeledText(combined, refs);
+    if (labeled) {
+      for (const [offset, targetIndex] of targetIndexes.entries()) {
+        texts.set(targetIndex, labeled.get(offset)!);
+      }
+      continue;
+    }
+    errors.push(
+      `Provided content could not be uniquely split across ${refs.map(displayHeading).join(", ")}.`,
+    );
+  }
+  return { texts, errors };
+}
+
 function defaultDocumentTargets(model: ManuscriptModel): ManuscriptOccurrence[] {
   return model.occurrences
     .filter((occurrence) => occurrence.canonical)
@@ -116,6 +237,8 @@ export function resolveTaskContext(args: {
   const ambiguities: ResolvedTargetAmbiguity[] = [];
   const contextBlocks: ResolvedTask["contextBlocks"] = [];
   const contextBlockIds = new Set<string>();
+  const providedPlan = planProvidedTextBindings(interpreted);
+  errors.push(...providedPlan.errors);
   let selection: ResolvedSelection | undefined;
 
   const pushContext = (occurrence: ManuscriptOccurrence) => {
@@ -159,8 +282,14 @@ export function resolveTaskContext(args: {
         continue;
       }
     } else if (occurrences.length > 1) {
-      ambiguities.push({ targetIndex, ref, choices: occurrences });
-      continue;
+      occurrence = canonicalOccurrence(model, ref);
+      if (!occurrence) {
+        ambiguities.push({ targetIndex, ref, choices: occurrences });
+        continue;
+      }
+      warnings.push(
+        `Multiple active occurrences exist for ${slotKey(ref)}; using canonical target ${occurrence.path}.`,
+      );
     } else {
       occurrence = canonicalOccurrence(model, ref);
     }
@@ -173,11 +302,12 @@ export function resolveTaskContext(args: {
     }
     const specificSources = mostSpecificSources(selectedSources);
     const uniqueSourceTexts = [...new Set(specificSources.map((source) => source.text))];
-    if (ref.slot === "title" && uniqueSourceTexts.length > 1) {
+    const plannedProvidedText = providedPlan.texts.get(targetIndex);
+    if (ref.slot === "title" && uniqueSourceTexts.length > 1 && plannedProvidedText === undefined) {
       errors.push("The title target resolves to multiple distinct source artifacts.");
       continue;
     }
-    const providedText = uniqueSourceTexts.join("\n");
+    const providedText = plannedProvidedText ?? uniqueSourceTexts.join("\n");
     if (occurrence) {
       const binding: ResolvedTargetBinding = {
         id: `binding:${occurrence.id}`,

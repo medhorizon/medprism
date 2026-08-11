@@ -94,6 +94,83 @@ describe("semantic Context Resolver", () => {
     expect(resolved.targets[0]?.providedText).toBe(userText);
   });
 
+  it("splits shared ordered source artifacts across multiple semantic targets", async () => {
+    const source = "\\documentclass{article}\n\\begin{document}\n\\section*{Funding}\nOld funding.\n\\section*{Data availability}\nOld data.\n\\end{document}";
+    const userText = "Funding was provided by Grant 1.\nAll data are included in this article.";
+    const sources = buildConversationArtifacts({ messageId: "u1", role: "user", content: userText });
+    const lines = sources.filter((artifact) => artifact.kind === "line");
+    const sourceIds = lines.map((line) => line.id);
+    const snapshot = await buildContextSnapshot({ projectId: "p", files: { "main.tex": source }, mainFile: "main.tex" });
+    const model = buildManuscriptModel(snapshot);
+    const resolved = resolveTaskContext({
+      snapshot,
+      model,
+      interpreted: {
+        spec: {
+          schemaVersion: "2",
+          action: "fill-sections",
+          applyMode: "propose-patch",
+          contentMode: "provided",
+          scope: "targets",
+          evidenceMode: "none",
+          targets: [
+            { slot: "funding", sourceIds },
+            { slot: "data-availability", sourceIds },
+          ],
+        },
+        ok: true,
+        sources,
+        source: "llm",
+        repaired: false,
+      },
+    });
+    expect(resolved.errors).toEqual([]);
+    expect(resolved.targets.map((target) => target.providedText)).toEqual([
+      "Funding was provided by Grant 1.",
+      "All data are included in this article.",
+    ]);
+  });
+
+  it("splits one labeled source block across multiple semantic targets without slot-specific code", async () => {
+    const source = "\\documentclass{article}\n\\begin{document}\n\\section*{Funding}\nOld funding.\n\\section*{Data availability}\nOld data.\n\\end{document}";
+    const userText = [
+      "Funding: Grant 1 supported this work.",
+      "Data availability: All data are included in this article.",
+    ].join("\n");
+    const sources = buildConversationArtifacts({ messageId: "u1", role: "user", content: userText });
+    const block = sources.find((artifact) => artifact.kind === "block")!;
+    const sourceIds = [block.id];
+    const snapshot = await buildContextSnapshot({ projectId: "p", files: { "main.tex": source }, mainFile: "main.tex" });
+    const model = buildManuscriptModel(snapshot);
+    const resolved = resolveTaskContext({
+      snapshot,
+      model,
+      interpreted: {
+        spec: {
+          schemaVersion: "2",
+          action: "fill-sections",
+          applyMode: "propose-patch",
+          contentMode: "provided",
+          scope: "targets",
+          evidenceMode: "none",
+          targets: [
+            { slot: "funding", sourceIds },
+            { slot: "data-availability", sourceIds },
+          ],
+        },
+        ok: true,
+        sources,
+        source: "llm",
+        repaired: false,
+      },
+    });
+    expect(resolved.errors).toEqual([]);
+    expect(resolved.targets.map((target) => target.providedText)).toEqual([
+      "Grant 1 supported this work.",
+      "All data are included in this article.",
+    ]);
+  });
+
   it("prefers the most specific trusted artifact when source ranges overlap", async () => {
     const source = "\\documentclass{article}\n\\begin{document}\n\\title{Old}\n\\end{document}";
     const userText = "修改标题为Exact Runtime Text";

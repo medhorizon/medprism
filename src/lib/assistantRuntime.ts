@@ -12,8 +12,6 @@ import { resolveTaskContext, type ResolvedTask } from "./context/resolver";
 import { buildManuscriptModel } from "./manuscript/model";
 import { interpretTaskSpec, lockedTaskAction } from "./task/interpreter";
 import {
-  buildPendingDisambiguationTask,
-  buildPendingFileTask,
   interpretedFromDisambiguationChoice,
   interpretedFromPending,
 } from "./task/confirmation";
@@ -26,6 +24,7 @@ import type {
   WorkflowKind,
   WorkflowRequest,
 } from "./workflows/types";
+import type { PatchSet } from "./patch/schema";
 import {
   ensureToolsRegistered,
   type AssistantMode,
@@ -88,6 +87,22 @@ function asSuggestion(patchSet: NonNullable<ChatSuggestion["patchSet"]>): ChatSu
     patchSet,
     status: "pending",
   };
+}
+
+function patchSetsForSuggestions(patchSet: PatchSet, resolved: ResolvedTask): PatchSet[] {
+  if (
+    resolved.spec.action !== "fill-sections" ||
+    resolved.targets.length <= 1 ||
+    patchSet.operations.length <= 1
+  ) {
+    return [patchSet];
+  }
+  return patchSet.operations.map((operation, index) => ({
+    ...patchSet,
+    id: crypto.randomUUID(),
+    summary: `${patchSet.summary} (${index + 1}/${patchSet.operations.length})`,
+    operations: [operation],
+  }));
 }
 
 function actionForWorkflow(workflow: WorkflowKind): TaskAction {
@@ -179,19 +194,6 @@ function blockedResult(args: {
   };
 }
 
-function confirmationText(task: PendingFileTask): string {
-  const targets = task.targets.map((target) => `${target.slot}${target.path ? `（${target.path}）` : ""}`).join("、");
-  const preview = task.targets.map((target) => target.preview).find(Boolean);
-  return `检测到文件修改请求，将处理：${targets || "当前选区"}。${preview ? `\n\n内容预览：${preview}` : ""}\n\n请确认是否继续生成 Diff/Keep；此时尚未修改项目文件。`;
-}
-
-function disambiguationText(task: PendingDisambiguationTask): string {
-  const choices = task.choices
-    .map((choice, index) => `${index + 1}. ${choice.slot} · ${choice.path}${choice.preview ? `\n   ${choice.preview}` : ""}`)
-    .join("\n");
-  return `Multiple possible manuscript targets were found. Choose the exact target before MedPrism prepares Diff/Keep.\n\n${choices}`;
-}
-
 export async function runAssistant(
   req: RuntimeRequest,
   dependencies: Partial<AssistantRuntimeDependencies> = {},
@@ -267,57 +269,14 @@ export async function runAssistant(
     });
   }
   if (resolved.ambiguities.length > 0) {
-    const disambiguation = buildPendingDisambiguationTask(resolved, {
-      taskSource: interpreted.source,
-      repaired: interpreted.repaired,
-      explicitlyAuthorized: Boolean(lockedAction || resumedDisambiguation?.task.explicitlyAuthorized),
+    return blockedResult({
+      message: "Semantic targets could not be resolved to canonical write targets.",
+      source: resumed || resumedDisambiguation ? "resumed" : interpreted.source,
+      action: interpreted.spec.action,
+      targetCount: resolved.ambiguities.length,
+      failureCode: "TARGET_AMBIGUOUS",
+      notes: resolved.toolNotes,
     });
-    const execution: ChatExecution = {
-      schemaVersion: "1",
-      outcome: "disambiguation-required",
-      taskSource: interpreted.source,
-      action: resolved.spec.action,
-      targetCount: disambiguation.choices.length,
-    };
-    return {
-      agent: {
-        schemaVersion: "1",
-        workflow: workflowForAction(resolved.spec.action),
-        summary: "Waiting for target selection",
-        warnings: resolved.warnings,
-      },
-      content: disambiguationText(disambiguation),
-      suggestions: [],
-      toolNotes: [...resolved.toolNotes, "outcome:disambiguation-required"],
-      outcome: "disambiguation-required",
-      execution,
-      disambiguation,
-    };
-  }
-  const bypassConfirmation = Boolean(resumed || lockedAction || resumedDisambiguation?.task.explicitlyAuthorized);
-  if (resolved.spec.applyMode === "propose-patch" && !bypassConfirmation) {
-    const confirmation = buildPendingFileTask(resolved);
-    const execution: ChatExecution = {
-      schemaVersion: "1",
-      outcome: "confirmation-required",
-      taskSource: interpreted.source,
-      action: resolved.spec.action,
-      targetCount: resolved.targets.length,
-    };
-    return {
-      agent: {
-        schemaVersion: "1",
-        workflow: workflowForAction(resolved.spec.action),
-        summary: "Waiting for file transaction confirmation",
-        warnings: resolved.warnings,
-      },
-      content: confirmationText(confirmation),
-      suggestions: [],
-      toolNotes: [...resolved.toolNotes, "outcome:confirmation-required"],
-      outcome: "confirmation-required",
-      execution,
-      confirmation,
-    };
   }
   const result = await execute({
     request: workflowRequestFromTask(req, resolved),
@@ -330,9 +289,11 @@ export async function runAssistant(
 
   const suggestions: ChatSuggestion[] = [];
   if (result.agent.patch) {
-    suggestions.push(
-      await enrichSuggestion(asSuggestion(result.agent.patch), req.ctx.files),
-    );
+    for (const patchSet of patchSetsForSuggestions(result.agent.patch, resolved)) {
+      suggestions.push(
+        await enrichSuggestion(asSuggestion(patchSet), req.ctx.files),
+      );
+    }
   }
 
   if (resolved.spec.applyMode === "propose-patch" && !result.agent.patch) {

@@ -1,4 +1,3 @@
-import scientificWritingSkill from "../../../skills/scientific-writing/SKILL.md?raw";
 import { taggedPromptData } from "../promptData";
 import {
   compactPaperHits,
@@ -11,6 +10,8 @@ import {
   type WorkflowHandler,
   type WorkflowResult,
 } from "./types";
+
+const SKILLS_DISABLED_TEXT = "";
 
 function invalidResearchResult(message: string): WorkflowResult {
   return {
@@ -32,8 +33,8 @@ export const runResearchWorkflow: WorkflowHandler = async (input) => {
         role: "system",
         content: buildWorkflowSystemPrompt({
           workflow: "research",
-          skillId: "scientific-writing",
-          skill: scientificWritingSkill,
+          skillId: "skills-disabled:scientific-writing",
+          skill: SKILLS_DISABLED_TEXT,
           capabilities: ["research"],
         }),
       },

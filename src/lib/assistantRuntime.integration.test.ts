@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { runAssistant } from "./assistantRuntime";
 import { buildConversationArtifacts, withConversationArtifacts } from "./conversationArtifacts";
+import { sha256Hex } from "./patch/hash";
 import { simulatePatchSet } from "./patch/simulate";
 import type { InterpretedTask } from "./task/types";
 import type { ChatMessage } from "../types/chat";
@@ -51,6 +52,53 @@ function exactTitleTask(sources: ReturnType<typeof buildConversationArtifacts>, 
     sources,
     source: "llm",
     repaired: false,
+  };
+}
+
+async function oneReplacePatch(files: Record<string, string>, path: string, oldText: string, newText: string) {
+  return {
+    schemaVersion: "1" as const,
+    id: crypto.randomUUID(),
+    projectRevision: "r1",
+    summary: `Replace ${path}`,
+    operations: [{
+      op: "replace_text" as const,
+      path,
+      baseSha256: await sha256Hex(files[path] ?? ""),
+      oldText,
+      newText,
+      expectedOccurrences: 1 as const,
+      range: {
+        start: (files[path] ?? "").indexOf(oldText),
+        end: (files[path] ?? "").indexOf(oldText) + oldText.length,
+      },
+    }],
+    verify: { compile: true },
+  };
+}
+
+async function multiReplacePatch(
+  files: Record<string, string>,
+  replacements: Array<{ path: string; oldText: string; newText: string }>,
+) {
+  return {
+    schemaVersion: "1" as const,
+    id: crypto.randomUUID(),
+    projectRevision: "r1",
+    summary: "Fill manuscript sections",
+    operations: await Promise.all(replacements.map(async ({ path, oldText, newText }) => ({
+      op: "replace_text" as const,
+      path,
+      baseSha256: await sha256Hex(files[path] ?? ""),
+      oldText,
+      newText,
+      expectedOccurrences: 1 as const,
+      range: {
+        start: (files[path] ?? "").indexOf(oldText),
+        end: (files[path] ?? "").indexOf(oldText) + oldText.length,
+      },
+    }))),
+    verify: { compile: true },
   };
 }
 
@@ -123,7 +171,7 @@ describe("natural conversation file transactions", () => {
     expect(result.execution).toMatchObject({ taskSource: "runtime", action: "polish" });
   });
 
-  it("turns assisted-writing intent into a confirmation card when TaskSpec chooses a file transaction", async () => {
+  it("directly prepares Diff/Keep when TaskSpec chooses a file transaction", async () => {
     const abstractSource = String.raw`\documentclass{article}
 \begin{document}
 \title{Old Title}
@@ -134,7 +182,8 @@ Old abstract.
 Text.
 \end{document}`;
     const user = withConversationArtifacts({ id: "u-abstract", role: "user", content: "请帮我重写摘要，使其更适合投稿" });
-    const result = await runAssistant(request(user.content, [user], { "main.tex": abstractSource }), {
+    const files = { "main.tex": abstractSource };
+    const result = await runAssistant(request(user.content, [user], files), {
       interpret: async () => ({
         ok: true,
         spec: {
@@ -150,22 +199,109 @@ Text.
         source: "llm",
         repaired: false,
       }),
+      execute: async (input) => ({
+        agent: {
+          schemaVersion: "1",
+          workflow: input.request.kind,
+          summary: "Write abstract",
+          warnings: [],
+          patch: await oneReplacePatch(files, "main.tex", "Old abstract.", "New abstract."),
+        },
+        content: "prepared",
+        toolNotes: [],
+      }),
     });
-    expect(result.outcome).toBe("confirmation-required");
-    expect(result.confirmation?.targets[0]?.slot).toBe("Abstract");
-    expect(result.suggestions).toEqual([]);
+    expect(result.outcome).toBe("patch-proposed");
+    expect(result.confirmation).toBeUndefined();
+    expect(result.disambiguation).toBeUndefined();
+    expect(result.suggestions).toHaveLength(1);
+  });
+
+  it("surfaces multi-target fill-section patches as separate Keep/Undo suggestions", async () => {
+    const multiSource = String.raw`\documentclass{article}
+\begin{document}
+\section*{Funding}
+Old funding.
+\section*{Data availability}
+Old data.
+\end{document}`;
+    const user = withConversationArtifacts({
+      id: "u-multi",
+      role: "user",
+      content: "Funding: Grant 1.\nData availability: All data are included.",
+    });
+    const block = user.artifacts!.find((artifact) => artifact.kind === "block")!;
+    const files = { "main.tex": multiSource };
+    const result = await runAssistant(request(user.content, [user], files), {
+      interpret: async () => ({
+        ok: true,
+        spec: {
+          schemaVersion: "2",
+          action: "fill-sections",
+          applyMode: "propose-patch",
+          contentMode: "provided",
+          scope: "targets",
+          evidenceMode: "none",
+          targets: [
+            { slot: "funding", sourceIds: [block.id] },
+            { slot: "data-availability", sourceIds: [block.id] },
+          ],
+        },
+        sources: user.artifacts!,
+        source: "llm",
+        repaired: false,
+      }),
+      execute: async (input) => {
+        expect(input.request.resolvedTask?.targets.map((target) => target.providedText)).toEqual([
+          "Grant 1.",
+          "All data are included.",
+        ]);
+        return {
+          agent: {
+            schemaVersion: "1",
+            workflow: input.request.kind,
+            summary: "Fill manuscript sections",
+            warnings: [],
+            patch: await multiReplacePatch(files, [
+              { path: "main.tex", oldText: "Old funding.", newText: "Grant 1." },
+              { path: "main.tex", oldText: "Old data.", newText: "All data are included." },
+            ]),
+          },
+          content: "prepared",
+          toolNotes: [],
+        };
+      },
+    });
+    expect(result.outcome).toBe("patch-proposed");
+    expect(result.suggestions).toHaveLength(2);
+    expect(result.suggestions.map((suggestion) => suggestion.patchSet?.operations)).toEqual([
+      [expect.objectContaining({ oldText: "Old funding.", newText: "Grant 1." })],
+      [expect.objectContaining({ oldText: "Old data.", newText: "All data are included." })],
+    ]);
   });
 
   it("uses runtime high-confidence fallback for based-on-title introduction drafting when TaskSpec JSON fails", async () => {
     const user = withConversationArtifacts({ id: "u-intro", role: "user", content: "基于标题写一个引言" });
-    const result = await runAssistant(request(user.content, [user]));
-    expect(result.outcome).toBe("confirmation-required");
+    const result = await runAssistant(request(user.content, [user]), {
+      execute: async (input) => ({
+        agent: {
+          schemaVersion: "1",
+          workflow: input.request.kind,
+          summary: "Write introduction",
+          warnings: [],
+          patch: await oneReplacePatch({ "main.tex": source }, "main.tex", "Text.", "Generated introduction."),
+        },
+        content: "prepared",
+        toolNotes: [],
+      }),
+    });
+    expect(result.outcome).toBe("patch-proposed");
     expect(result.execution).toMatchObject({ taskSource: "runtime", action: "draft" });
-    expect(result.confirmation?.targets[0]?.slot).toBe("Introduction");
-    expect(result.suggestions).toEqual([]);
+    expect(result.confirmation).toBeUndefined();
+    expect(result.suggestions).toHaveLength(1);
   });
 
-  it("asks for confirmation, then creates a canonical title PatchSet without reinterpreting", async () => {
+  it("creates a canonical title PatchSet immediately after context resolution", async () => {
     const user = withConversationArtifacts({
       id: "u3",
       role: "user",
@@ -176,17 +312,11 @@ Text.
     const first = await runAssistant(request(user.content, conversation), {
       interpret: async () => exactTitleTask(user.artifacts!, payload.id),
     });
-    expect(first.outcome).toBe("confirmation-required");
-    expect(first.suggestions).toEqual([]);
-    expect(first.confirmation?.targets[0]).toMatchObject({ slot: "Title", preview: payload.text });
-
-    const confirmed = await runAssistant({
-      ...request("确认", conversation),
-      resumeTask: first.confirmation,
-    });
-    expect(confirmed.outcome).toBe("patch-proposed");
-    expect(confirmed.suggestions).toHaveLength(1);
-    const patch = confirmed.agent.patch!;
+    expect(first.outcome).toBe("patch-proposed");
+    expect(first.confirmation).toBeUndefined();
+    expect(first.disambiguation).toBeUndefined();
+    expect(first.suggestions).toHaveLength(1);
+    const patch = first.agent.patch!;
     const simulated = await simulatePatchSet({ "main.tex": source }, patch);
     expect(simulated.ok).toBe(true);
     if (simulated.ok) {
@@ -195,7 +325,7 @@ Text.
     }
   });
 
-  it("asks the user to choose when a real active manuscript graph has multiple title targets", async () => {
+  it("uses the canonical manuscript target instead of opening a target-selection card", async () => {
     const files = {
       "main.tex": "\\documentclass{article}\n\\begin{document}\n\\title{Main Title}\n\\input{front/title}\n\\end{document}",
       "front/title.tex": "\\title{Included Title}",
@@ -210,31 +340,14 @@ Text.
     const first = await runAssistant(request(user.content, conversation, files), {
       interpret: async () => exactTitleTask(user.artifacts!, payload.id),
     });
-    expect(first.outcome).toBe("disambiguation-required");
-    expect(first.suggestions).toEqual([]);
-    expect(first.disambiguation?.choices.map((choice) => choice.path)).toEqual([
-      "main.tex",
-      "front/title.tex",
-    ]);
-
-    const includedChoice = first.disambiguation!.choices.find((choice) => choice.path === "front/title.tex")!;
-    const selected = await runAssistant({
-      ...request("Select target", conversation, files),
-      resumeDisambiguation: { task: first.disambiguation!, choiceId: includedChoice.id },
-    });
-    expect(selected.outcome).toBe("confirmation-required");
-    expect(selected.confirmation?.targets[0]).toMatchObject({ path: "front/title.tex", preview: payload.text });
-
-    const confirmed = await runAssistant({
-      ...request("confirm", conversation, files),
-      resumeTask: selected.confirmation,
-    });
-    expect(confirmed.outcome).toBe("patch-proposed");
-    const simulated = await simulatePatchSet(files, confirmed.agent.patch!);
+    expect(first.outcome).toBe("patch-proposed");
+    expect(first.disambiguation).toBeUndefined();
+    expect(first.confirmation).toBeUndefined();
+    const simulated = await simulatePatchSet(files, first.agent.patch!);
     expect(simulated.ok).toBe(true);
     if (simulated.ok) {
-      expect(simulated.simulation.nextFiles["main.tex"]).toContain("\\title{Main Title}");
-      expect(simulated.simulation.nextFiles["front/title.tex"]).toContain("\\title{Graph-Selected Title}");
+      expect(simulated.simulation.nextFiles["main.tex"]).toContain("\\title{Graph-Selected Title}");
+      expect(simulated.simulation.nextFiles["front/title.tex"]).toContain("\\title{Included Title}");
     }
   });
 
@@ -251,9 +364,14 @@ Text.
     const result = await runAssistant(request(user.content, conversation), {
       interpret: async () => exactTitleTask(allSources, third.id),
     });
-    expect(result.outcome).toBe("confirmation-required");
-    expect(result.confirmation?.targets[0]?.preview).toBe("Third Exact Title");
-    expect(result.confirmation?.sources[0]?.text).toBe("Third Exact Title");
+    expect(result.outcome).toBe("patch-proposed");
+    expect(result.confirmation).toBeUndefined();
+    expect(result.suggestions).toHaveLength(1);
+    const simulated = await simulatePatchSet({ "main.tex": source }, result.agent.patch!);
+    expect(simulated.ok).toBe(true);
+    if (simulated.ok) {
+      expect(simulated.simulation.nextFiles["main.tex"]).toContain("\\title{Third Exact Title}");
+    }
   });
 
   it("blocks an invalid TaskSpec instead of silently answering as advice", async () => {
@@ -283,7 +401,7 @@ Text.
     expect(result.suggestions).toHaveLength(1);
   });
 
-  it("blocks a confirmed selection transaction when the selection changed", async () => {
+  it("prepares a selection transaction immediately without a confirmation card", async () => {
     const selected = "Old Title";
     const user = withConversationArtifacts({ id: "u1", role: "user", content: "修改所选标题为New Title" });
     const payload = user.artifacts!.find((artifact) => artifact.kind === "assignment-value")!;
@@ -308,39 +426,20 @@ Text.
         },
       }),
     });
-    expect(first.outcome).toBe("confirmation-required");
-
-    const changedSelectionRequest = {
-      ...request("确认", [user]),
-      ctx: {
-        ...request("确认", [user]).ctx,
-        selection: { start: source.indexOf("Text."), end: source.indexOf("Text.") + "Text.".length },
-      },
-      resumeTask: first.confirmation,
-    };
-    const result = await runAssistant(changedSelectionRequest);
-    expect(result.outcome).toBe("blocked");
-    expect(result.execution.failureCode).toBe("SELECTION_STALE");
-    expect(result.suggestions).toEqual([]);
+    expect(first.outcome).toBe("patch-proposed");
+    expect(first.confirmation).toBeUndefined();
+    expect(first.suggestions).toHaveLength(1);
   });
 
-  it("re-resolves a semantic slot against the current revision after confirmation", async () => {
+  it("uses the current revision when preparing the immediate semantic patch", async () => {
     const user = withConversationArtifacts({ id: "u1", role: "user", content: "修改标题为Revision-Safe Title" });
     const payload = user.artifacts!.find((artifact) => artifact.kind === "assignment-value")!;
-    const first = await runAssistant(request(user.content, [user]), {
+    const changedSource = source.replace("\\begin{document}", "\\begin{document}\n% unrelated edit before title");
+    const result = await runAssistant(request(user.content, [user], { "main.tex": changedSource }), {
       interpret: async () => exactTitleTask(user.artifacts!, payload.id),
     });
-    const changedSource = source.replace("\\begin{document}", "\\begin{document}\n% unrelated edit before title");
-    const confirmed = await runAssistant({
-      ...request("确认", [user]),
-      ctx: {
-        ...request("确认", [user]).ctx,
-        files: { "main.tex": changedSource },
-      },
-      resumeTask: first.confirmation,
-    });
-    expect(confirmed.outcome).toBe("patch-proposed");
-    const simulated = await simulatePatchSet({ "main.tex": changedSource }, confirmed.agent.patch!);
+    expect(result.outcome).toBe("patch-proposed");
+    const simulated = await simulatePatchSet({ "main.tex": changedSource }, result.agent.patch!);
     expect(simulated.ok).toBe(true);
     if (simulated.ok) {
       expect(simulated.simulation.nextFiles["main.tex"]).toContain("\\title{Revision-Safe Title}");

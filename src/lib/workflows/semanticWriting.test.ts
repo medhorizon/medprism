@@ -97,7 +97,62 @@ describe("runtime-owned semantic writing", () => {
     }
   });
 
-  it("requires target selection when Data availability is duplicated", async () => {
+  it("fills shared multi-target prose by runtime content bindings instead of duplicating the blob", async () => {
+    const manuscript = springer.replace(
+      "\\item Funding: Old funding.",
+      "\\item Author contributions: Old contributions.\n\\item Funding: Old funding.",
+    );
+    const userText = [
+      "Author contributions: Y.L. and H.W. performed experiments.",
+      "Funding: This work was supported by Grant 1.",
+      "Data availability: All data are included in this article.",
+    ].join("\n");
+    const sources = buildConversationArtifacts({ messageId: "u1", role: "user", content: userText });
+    const block = sources.find((artifact) => artifact.kind === "block")!;
+    const snapshot = await buildContextSnapshot({ projectId: "p", files: { "main.tex": manuscript }, mainFile: "main.tex" });
+    const model = buildManuscriptModel(snapshot);
+    const resolved = resolveTaskContext({
+      snapshot,
+      model,
+      interpreted: {
+        spec: {
+          schemaVersion: "2",
+          action: "fill-sections",
+          applyMode: "propose-patch",
+          contentMode: "provided",
+          scope: "targets",
+          evidenceMode: "none",
+          targets: [
+            { slot: "author-contributions", sourceIds: [block.id] },
+            { slot: "funding", sourceIds: [block.id] },
+            { slot: "data-availability", sourceIds: [block.id] },
+          ],
+        },
+        ok: true,
+        sources,
+        source: "llm",
+        repaired: false,
+      },
+    });
+    expect(resolved.errors).toEqual([]);
+    expect(resolved.targets.map((target) => target.providedText)).toEqual([
+      "Y.L. and H.W. performed experiments.",
+      "This work was supported by Grant 1.",
+      "All data are included in this article.",
+    ]);
+    const result = await runSemanticWriting(snapshot, resolved);
+    const simulated = await simulatePatchSet({ ...snapshot.files }, result!.agent.patch!);
+    expect(simulated.ok).toBe(true);
+    if (simulated.ok) {
+      const next = simulated.simulation.nextFiles["main.tex"]!;
+      expect(next).toContain("\\item Author contributions: Y.L. and H.W. performed experiments.");
+      expect(next).toContain("\\item Funding: This work was supported by Grant 1.");
+      expect(next).toContain("\\item Data availability: All data are included in this article.");
+      expect(next).not.toContain("Funding: This work was supported by Grant 1.\nData availability");
+    }
+  });
+
+  it("uses the canonical target when Data availability is duplicated", async () => {
     const duplicated = springer.replace(
       "\\bibliography{refs}",
       "\\section*{Data availability}\nA second statement.\n\\bibliography{refs}",
@@ -124,8 +179,9 @@ describe("runtime-owned semantic writing", () => {
       },
     });
     expect(resolved.errors).toEqual([]);
-    expect(resolved.ambiguities).toHaveLength(1);
-    expect(resolved.ambiguities[0]?.choices).toHaveLength(2);
+    expect(resolved.ambiguities).toEqual([]);
+    expect(resolved.warnings.join(" ")).toContain("Multiple active occurrences exist for data-availability");
+    expect(resolved.targets[0]?.occurrence?.canonical).toBe(true);
     const result = await runSemanticWriting(snapshot, resolved);
     expect(result?.agent.patch).toBeUndefined();
   });

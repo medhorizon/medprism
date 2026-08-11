@@ -24,7 +24,6 @@ import type {
   WorkflowKind,
   WorkflowRequest,
 } from "./workflows/types";
-import type { PatchSet } from "./patch/schema";
 import {
   ensureToolsRegistered,
   type AssistantMode,
@@ -87,22 +86,6 @@ function asSuggestion(patchSet: NonNullable<ChatSuggestion["patchSet"]>): ChatSu
     patchSet,
     status: "pending",
   };
-}
-
-function patchSetsForSuggestions(patchSet: PatchSet, resolved: ResolvedTask): PatchSet[] {
-  if (
-    resolved.spec.action !== "fill-sections" ||
-    resolved.targets.length <= 1 ||
-    patchSet.operations.length <= 1
-  ) {
-    return [patchSet];
-  }
-  return patchSet.operations.map((operation, index) => ({
-    ...patchSet,
-    id: crypto.randomUUID(),
-    summary: `${patchSet.summary} (${index + 1}/${patchSet.operations.length})`,
-    operations: [operation],
-  }));
 }
 
 function actionForWorkflow(workflow: WorkflowKind): TaskAction {
@@ -289,11 +272,9 @@ export async function runAssistant(
 
   const suggestions: ChatSuggestion[] = [];
   if (result.agent.patch) {
-    for (const patchSet of patchSetsForSuggestions(result.agent.patch, resolved)) {
-      suggestions.push(
-        await enrichSuggestion(asSuggestion(patchSet), req.ctx.files),
-      );
-    }
+    suggestions.push(
+      await enrichSuggestion(asSuggestion(result.agent.patch), req.ctx.files),
+    );
   }
 
   if (resolved.spec.applyMode === "propose-patch" && !result.agent.patch) {

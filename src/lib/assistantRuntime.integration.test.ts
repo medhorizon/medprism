@@ -217,7 +217,7 @@ Text.
     expect(result.suggestions).toHaveLength(1);
   });
 
-  it("surfaces multi-target fill-section patches as separate Keep/Undo suggestions", async () => {
+  it("surfaces multi-target fill-section patches as one atomic Keep/Undo suggestion", async () => {
     const multiSource = String.raw`\documentclass{article}
 \begin{document}
 \section*{Funding}
@@ -273,10 +273,10 @@ Old data.
       },
     });
     expect(result.outcome).toBe("patch-proposed");
-    expect(result.suggestions).toHaveLength(2);
-    expect(result.suggestions.map((suggestion) => suggestion.patchSet?.operations)).toEqual([
-      [expect.objectContaining({ oldText: "Old funding.", newText: "Grant 1." })],
-      [expect.objectContaining({ oldText: "Old data.", newText: "All data are included." })],
+    expect(result.suggestions).toHaveLength(1);
+    expect(result.suggestions[0]?.patchSet?.operations).toEqual([
+      expect.objectContaining({ oldText: "Old funding.", newText: "Grant 1." }),
+      expect.objectContaining({ oldText: "Old data.", newText: "All data are included." }),
     ]);
   });
 

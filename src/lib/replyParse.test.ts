@@ -184,6 +184,52 @@ describe("assistant reply parsing", () => {
     expect(parsed.envelope.schemaVersion).toBe("1");
   });
 
+  it("accepts numeric schemaVersion 1 inside patchProposal", () => {
+    const parsed = parseModelWorkflowEnvelope(
+      JSON.stringify({
+        schemaVersion: "1",
+        workflow: "writing",
+        summary: "Remove redundant template text",
+        warnings: [],
+        content: "Prepared a minimal removal.",
+        patchProposal: {
+          schemaVersion: 1,
+          summary: "Remove redundant text",
+          operations: [{ op: "replace_text", oldText: "redundant", newText: "" }],
+        },
+      }),
+      "writing",
+    );
+
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.envelope.proposal?.schemaVersion).toBe("1");
+  });
+
+  it("still rejects missing and unknown patchProposal schema versions", () => {
+    for (const schemaVersion of [undefined, "2", 2]) {
+      const patchProposal = {
+        summary: "Invalid version",
+        operations: [{ op: "replace_text", oldText: "old", newText: "new" }],
+        ...(schemaVersion === undefined ? {} : { schemaVersion }),
+      };
+      const parsed = parseModelWorkflowEnvelope(
+        JSON.stringify({
+          schemaVersion: "1",
+          workflow: "writing",
+          summary: "Invalid version",
+          warnings: [],
+          patchProposal,
+        }),
+        "writing",
+      );
+      expect(parsed.ok).toBe(false);
+      if (!parsed.ok) {
+        expect(parsed.error.message).toContain('patchProposal.schemaVersion must be "1" or 1');
+      }
+    }
+  });
+
   it("accepts a single writingDraft payload for runtime-owned target insertion", () => {
     const parsed = parseModelWorkflowEnvelope(JSON.stringify({
       schemaVersion: "1",

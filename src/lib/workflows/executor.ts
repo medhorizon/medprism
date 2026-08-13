@@ -1,4 +1,5 @@
 import { chatCompletions } from "../llmClient";
+import { buildContextPackage, injectContextPackage, type ContextPackage } from "../context/snapshot";
 import { runResearchStage as runResearchService } from "../research/service";
 import { runTool } from "../../tools/registry";
 import { runAdviceWorkflow } from "./advice";
@@ -19,7 +20,9 @@ import {
   type WorkflowServices,
 } from "./types";
 
-export type ExecuteWorkflowInput = Omit<WorkflowExecutionInput, "services" | "research">;
+export type ExecuteWorkflowInput = Omit<WorkflowExecutionInput, "services" | "research" | "contextPackage"> & {
+  contextPackage?: ContextPackage;
+};
 
 const HANDLERS: Record<WorkflowKind, WorkflowHandler> = {
   research: runResearchWorkflow,
@@ -35,11 +38,15 @@ const HANDLERS: Record<WorkflowKind, WorkflowHandler> = {
 function buildServices(
   onDelta?: (delta: string) => void,
   signal?: AbortSignal,
+  contextPackage?: ExecuteWorkflowInput["contextPackage"],
 ): WorkflowServices {
   return {
     complete: (request) =>
       chatCompletions({
         ...request,
+        messages: contextPackage
+          ? injectContextPackage(request.messages, contextPackage)
+          : request.messages,
         stream: request.stream !== false,
         signal: request.signal ?? signal,
         ...(request.onDelta || onDelta
@@ -125,11 +132,7 @@ function normalizedPlan(input: ExecuteWorkflowInput): WorkflowPlan {
   const target =
     primary === "advice" || primary === "research" || primary === "review"
       ? undefined
-      : supplied?.target ?? (
-          input.request.selection && (primary === "writing" || primary === "polish")
-            ? { kind: "selection" as const, createIfMissing: false }
-            : undefined
-        );
+      : supplied?.target;
   const applyToLatex = modifiesLatex(primary);
   const steps: WorkflowPlan["steps"] =
     primary === "research"
@@ -190,8 +193,10 @@ export function validateWorkflowResult(
  */
 export async function executeWorkflow(
   input: ExecuteWorkflowInput,
-  services: WorkflowServices = buildServices(input.onDelta, input.signal),
+  suppliedServices?: WorkflowServices,
 ): Promise<WorkflowResult> {
+  const initialContextPackage = input.contextPackage ?? await buildContextPackage(input.ctx);
+  const services = suppliedServices ?? buildServices(input.onDelta, input.signal, initialContextPackage);
   const plan = normalizedPlan(input);
   const planError = validateWorkflowPlan(plan);
   if (planError) {
@@ -236,7 +241,10 @@ export async function executeWorkflow(
     );
   }
 
-  const baseInput: WorkflowExecutionInput = { ...input, request, ctx, services };
+  const contextPackage = ctx === input.ctx
+    ? initialContextPackage
+    : await buildContextPackage(ctx);
+  const baseInput: WorkflowExecutionInput = { ...input, request, ctx, contextPackage, services };
 
   if (plan.research) {
     const researched = await runResearchService({

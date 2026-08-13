@@ -7,6 +7,8 @@ import {
   isSessionSending,
   persistDurableChat,
   setSessionChat,
+  startProjectAssistant,
+  stopProjectAssistant,
 } from "./projectChatSession";
 
 const storage = new Map<string, string>();
@@ -16,6 +18,10 @@ vi.mock("./projectArtifacts", () => ({
     storage.set(projectId, JSON.stringify(messages));
     return true;
   },
+}));
+
+vi.mock("../lib/assistantRuntime", () => ({
+  runAssistant: vi.fn(() => new Promise(() => undefined)),
 }));
 
 describe("projectChatSession", () => {
@@ -54,5 +60,25 @@ describe("projectChatSession", () => {
     );
     expect(isSessionSending("a")).toBe(false);
     expect(getSessionChat("a")[0]?.content).toBe("done");
+  });
+
+  it("finalizes a pending reply when stopped", () => {
+    void startProjectAssistant({
+      projectId: "a",
+      config: { mode: "hosted", baseUrl: "http://example.test/v1", apiKey: "key", model: "model" },
+      displayUserText: "hello",
+      userText: "hello",
+      history: [],
+      workflow: "auto",
+      ctx: { projectId: "a", files: { "main.tex": "text" }, mainFile: "main.tex", activeFile: "main.tex" },
+      thinkingLabel: "Thinking",
+      mapError: () => "Failed",
+    });
+    expect(isSessionSending("a")).toBe(true);
+    expect(stopProjectAssistant("a", "Stopped")).toBe(true);
+    expect(isSessionSending("a")).toBe(false);
+    expect(getSessionChat("a").at(-1)).toMatchObject({ content: "Stopped" });
+    expect(getSessionChat("a").at(-1)?.pending).toBeUndefined();
+    expect(storage.has("a")).toBe(true);
   });
 });

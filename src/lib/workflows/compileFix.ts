@@ -1,4 +1,4 @@
-import fixCompileSkill from "../../../skills/fix-compile-errors/SKILL.md?raw";
+import fixCompileSkill from "../../../skills/staged/fix-compile-errors/SKILL.md?raw";
 import { buildContextSnapshot, type ContextSnapshot } from "../context/snapshot";
 import { parseModelPatchProposal, type ModelPatchProposal, type PatchSet, type SourceRange } from "../patch/schema";
 import { parseModelWorkflowEnvelope } from "../replyParse";
@@ -226,7 +226,13 @@ function invalidCompileFixResult(
 }
 
 export const runCompileFixWorkflow: WorkflowHandler = async (input) => {
-  const compiled = await input.services.runTool("compile", {}, input.ctx);
+  const existingLog = input.contextPackage.compile.log;
+  const compiled = existingLog
+    ? {
+        ok: true as const,
+        data: { compileOk: false, log: existingLog },
+      }
+    : await input.services.runTool("compile", {}, input.ctx);
   if (!compiled.ok) {
     return invalidCompileFixResult(`编译失败：${compiled.error}`);
   }
@@ -272,19 +278,22 @@ export const runCompileFixWorkflow: WorkflowHandler = async (input) => {
     );
   }
 
-  let snapshot: ContextSnapshot;
-  try {
-    const { lastCompileLog: _lastCompileLog, ...contextWithoutLog } = input.ctx;
-    snapshot = await buildContextSnapshot({
-      ...contextWithoutLog,
-      activeFile: diagnostic.file,
-    });
-  } catch (error) {
-    return invalidCompileFixResult(
-      error instanceof Error ? error.message : String(error),
-      "",
-      log,
-    );
+  let snapshot: ContextSnapshot = input.contextPackage;
+  if (snapshot.activeFile !== diagnostic.file) {
+    try {
+      snapshot = await buildContextSnapshot({
+        ...input.ctx,
+        activeFile: diagnostic.file,
+        selection: undefined,
+        lastCompileLog: log,
+      });
+    } catch (error) {
+      return invalidCompileFixResult(
+        error instanceof Error ? error.message : String(error),
+        "",
+        log,
+      );
+    }
   }
   const prepared = prepareCompileFix(snapshot, diagnostic);
   if (!prepared.ok) {

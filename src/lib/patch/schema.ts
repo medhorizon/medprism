@@ -114,6 +114,7 @@ export type PatchValidationErrorCode =
   | "DUPLICATE_CITE_KEY"
   | "BIB_ENTRY_MISMATCH"
   | "BIBLIOGRAPHY_NOT_CONFIGURED"
+  | "RESOURCE_NOT_FOUND"
   | "TEX_TRAILING_CONTENT";
 
 export type PatchValidationError = {
@@ -312,7 +313,15 @@ export function parsePatchSet(value: unknown): ParsePatchResult {
 export function parseModelPatchProposal(value: unknown): ParseProposalResult {
   if (!value || typeof value !== "object") return invalidProposal("Patch proposal must be an object");
   const raw = value as Record<string, unknown>;
-  if (raw.schemaVersion !== PATCH_SCHEMA_VERSION) return invalidProposal("Unsupported schemaVersion");
+  const schemaVersion =
+    raw.schemaVersion === 1 || raw.schemaVersion === PATCH_SCHEMA_VERSION
+      ? PATCH_SCHEMA_VERSION
+      : raw.schemaVersion;
+  if (schemaVersion !== PATCH_SCHEMA_VERSION) {
+    return invalidProposal(
+      `patchProposal.schemaVersion must be "1" or 1; received ${String(raw.schemaVersion ?? "<missing>")}`,
+    );
+  }
   if (typeof raw.summary !== "string") return invalidProposal("summary must be a string");
   if (!Array.isArray(raw.operations) || raw.operations.length === 0) {
     return invalidProposal("operations must be a non-empty array");

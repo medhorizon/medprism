@@ -11,6 +11,7 @@ declare global {
           files: Record<string, string>;
           mainFile: string;
           projectRevision?: string;
+          synctex?: boolean;
         }): Promise<{
           ok: boolean;
           jobId: string;
@@ -18,6 +19,7 @@ declare global {
           code: string;
           log: string;
           pdfBase64?: string;
+          synctexBase64?: string;
           error?: string;
           projectRevision?: string;
         }>;

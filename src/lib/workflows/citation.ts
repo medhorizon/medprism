@@ -1,6 +1,6 @@
-import natureCitationSkill from "../../../skills/nature-citation/SKILL.md?raw";
-import naturePolishingSkill from "../../../skills/nature-polishing/SKILL.md?raw";
-import { buildContextSnapshot, formatWorkspaceContext, type ContextSnapshot } from "../context/snapshot";
+import natureCitationSkill from "../../../skills/staged/nature-citation/SKILL.md?raw";
+import naturePolishingSkill from "../../../skills/staged/nature-polishing/SKILL.md?raw";
+import { formatWorkspaceContext, type ContextSnapshot } from "../context/snapshot";
 import { sha256Hex } from "../patch/hash";
 import { assertSafeProjectRelativePath } from "../projectPath";
 import { taggedPromptData } from "../promptData";
@@ -112,18 +112,24 @@ function insertCitationBeforeTrailingPunctuation(claim: string, citation: string
   return `${claim.slice(0, match.index)}${citation}${claim.slice(match.index)}`;
 }
 
-function bibliographyPath(value: string): string {
+function bibliographyPath(value: string, mainFile?: string): string {
   const trimmed = value.trim();
   const withExtension = trimmed.toLowerCase().endsWith(".bib") ? trimmed : `${trimmed}.bib`;
-  return assertSafeProjectRelativePath(withExtension);
+  const mainDirectory = mainFile?.includes("/")
+    ? mainFile.slice(0, mainFile.lastIndexOf("/") + 1)
+    : "";
+  return assertSafeProjectRelativePath(`${mainDirectory}${withExtension}`);
 }
 
-export function discoverBibliographyPaths(files: Readonly<Record<string, string>>): string[] {
+export function discoverBibliographyPaths(
+  files: Readonly<Record<string, string>>,
+  mainFile?: string,
+): string[] {
   const found: string[] = [];
   const seen = new Set<string>();
   const add = (raw: string) => {
     try {
-      const path = bibliographyPath(raw);
+      const path = bibliographyPath(raw, mainFile);
       if (!seen.has(path)) {
         seen.add(path);
         found.push(path);
@@ -149,7 +155,7 @@ function resolveBibliographyPath(
   snapshot: ContextSnapshot,
   requested?: string,
 ): { ok: true; path: string } | { ok: false; error: PatchValidationError } {
-  const declared = discoverBibliographyPaths(snapshot.files);
+  const declared = discoverBibliographyPaths(snapshot.files, snapshot.mainFile);
   if (declared.length === 0) {
     return {
       ok: false,
@@ -164,7 +170,7 @@ function resolveBibliographyPath(
   if (requested) {
     let normalized: string;
     try {
-      normalized = bibliographyPath(requested);
+      normalized = bibliographyPath(requested, snapshot.mainFile);
     } catch (error) {
       return {
         ok: false,
@@ -466,12 +472,7 @@ async function optionalProseRevision(
 }
 
 export const runCitationWorkflow: WorkflowHandler = async (input) => {
-  let snapshot: ContextSnapshot;
-  try {
-    snapshot = await buildContextSnapshot(input.ctx);
-  } catch (error) {
-    return invalidCitationResult(error instanceof Error ? error.message : String(error));
-  }
+  const snapshot: ContextSnapshot = input.contextPackage;
   if (!snapshot.selectedText || !snapshot.selection) {
     return invalidCitationResult("请先选中需要补充引用的具体论断。");
   }

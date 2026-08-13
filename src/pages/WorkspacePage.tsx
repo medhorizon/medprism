@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type DragEvent } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { AssistantCard } from "../components/AssistantCard";
 import { FileTree } from "../components/FileTree";
@@ -16,10 +16,14 @@ import { isUsableLlmConfig, LlmClientError } from "../lib/llmClient";
 import {
   compiledPdfPath,
   decodeBinaryFile,
+  encodeBinaryBytes,
   withCompiledPdfFiles,
 } from "../lib/projectBinary";
 import { withSuggestionStatus } from "../lib/suggestions";
 import type { TextSelection } from "../lib/context/snapshot";
+import type { PdfTextSelection } from "../components/pdfSelection";
+import { locatePdfTextInSource } from "../lib/pdfSourceLocation";
+import { decodeSyncTexBase64, syncTexCandidatesForSelection } from "../lib/synctex";
 import { useI18n } from "../i18n/context";
 import { DEMO_PROJECT_ID } from "../data/sample";
 import { loadAuth } from "../state/auth";
@@ -39,6 +43,7 @@ import {
   setSessionChat,
   shutdownProjectChats,
   startProjectAssistant,
+  stopProjectAssistant,
   subscribeProjectChat,
 } from "../state/projectChatSession";
 import {
@@ -66,6 +71,7 @@ const FILES_MIN = 160;
 const FILES_MAX = 360;
 const PREVIEW_MIN = 280;
 const PREVIEW_MAX = 720;
+const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "pdf"]);
 
 function isDemoProject(project: Project | null | undefined) {
   return !!project &&
@@ -92,12 +98,15 @@ export function WorkspacePage() {
   const projectRef = useRef<Project | null>(project);
   const [activeFile, setActiveFile] = useState("main.tex");
   const [selection, setSelection] = useState<TextSelection | undefined>();
+  const [cursor, setCursor] = useState(0);
   const [chat, setChat] = useState<ChatMessage[]>([]);
   const chatRef = useRef<ChatMessage[]>(chat);
   const [draft, setDraft] = useState("");
   const [memoryNotes, setMemoryNotes] = useState("");
   const [aiOpen, setAiOpen] = useState(true);
-  const [aiHeight, setAiHeight] = useState(280);
+  const [aiHeight, setAiHeight] = useState(() =>
+    Math.min(560, Math.max(180, Math.round((window.innerHeight - 48) / 2))),
+  );
   const [filesWidth, setFilesWidth] = useState(220);
   const [previewWidth, setPreviewWidth] = useState(420);
   const [compiling, setCompiling] = useState(false);
@@ -116,7 +125,12 @@ export function WorkspacePage() {
   const [sending, setSending] = useState(false);
   const [auth, setAuth] = useState(() => loadAuth());
   const [lastCompileLog, setLastCompileLog] = useState("");
+  const lastCompileLogRef = useRef("");
+  const [imageDragActive, setImageDragActive] = useState(false);
+  const imageDragDepthRef = useRef(0);
   const [pdfUrl, setPdfUrl] = useState<string | null>(null);
+  const [syncTexSource, setSyncTexSource] = useState<string | null>(null);
+  const [revealedSelection, setRevealedSelection] = useState<TextSelection | undefined>();
   const pdfUrlRef = useRef<string | null>(null);
   const compileControllerRef = useRef<AbortController | null>(null);
   const compileRunRef = useRef(0);
@@ -251,10 +265,14 @@ export function WorkspacePage() {
       pdfUrlRef.current = null;
     }
     setPdfUrl(null);
+    setSyncTexSource(null);
+    setRevealedSelection(undefined);
 
     const next = initialProject(projectId);
     setProjectState(next);
     setSelection(undefined);
+    setImageDragActive(false);
+    imageDragDepthRef.current = 0;
     sizeWarningProjectRef.current = null;
     const storageError = getLastProjectStoreError();
     if (storageError) flash(`项目存储错误：${storageError.message}`);
@@ -507,12 +525,15 @@ export function WorkspacePage() {
         files: snapshotFiles,
         mainFile: mainFileFor(current),
         projectRevision: revision,
+        synctex: true,
       },
       controller.signal,
     );
     if (compileRunRef.current !== runId) return false;
     compileControllerRef.current = null;
-    setLastCompileLog(result.log || result.error || "");
+    const compileLog = result.log || result.error || "";
+    lastCompileLogRef.current = compileLog;
+    setLastCompileLog(compileLog);
     compilingRef.current = false;
     setCompiling(false);
 
@@ -525,6 +546,7 @@ export function WorkspacePage() {
     }
 
     if (result.ok && result.pdfBase64) {
+      setSyncTexSource(result.synctexBase64 ? await decodeSyncTexBase64(result.synctexBase64) : null);
       setPdfFromBase64(result.pdfBase64);
       setCompiled(true);
       setCompileFailed(false);
@@ -547,6 +569,21 @@ export function WorkspacePage() {
           : t("workspace.toastCompileFailed"),
     );
     return false;
+  }
+
+  function revealPdfSelection(pdfSelection: PdfTextSelection) {
+    const current = projectRef.current;
+    if (!current || !syncTexSource) return;
+    const located = locatePdfTextInSource({
+      selectedText: pdfSelection.text,
+      candidates: syncTexCandidatesForSelection(syncTexSource, pdfSelection),
+      files: current.files,
+    });
+    if (!located) return;
+    setActiveFile(located.path);
+    setSelection(located.selection);
+    setCursor(located.selection.end);
+    setRevealedSelection(located.selection);
   }
 
   async function compile() {
@@ -642,7 +679,8 @@ export function WorkspacePage() {
     const requestMainFile = mainFileFor(current);
     const requestActiveFile = activeFile;
     const requestSelection = selection;
-    const requestCompileLog = lastCompileLog;
+    const requestCursor = cursor;
+    const requestCompileLog = lastCompileLogRef.current || lastCompileLog;
     const selectedText = requestSelection
       ? requestFiles[requestActiveFile]?.slice(requestSelection.start, requestSelection.end)
       : undefined;
@@ -693,6 +731,7 @@ export function WorkspacePage() {
           files: requestFiles,
           mainFile: requestMainFile,
           activeFile: requestActiveFile,
+          cursor: requestCursor,
           ...(requestSelection ? { selection: requestSelection } : {}),
           ...(selectedText !== undefined ? { selectedText } : {}),
           ...(requestCompileLog ? { lastCompileLog: requestCompileLog } : {}),
@@ -700,6 +739,7 @@ export function WorkspacePage() {
         },
         onComplete: async (result) => {
           if (result.lastCompileLog && projectRef.current?.id === requestProjectId) {
+            lastCompileLogRef.current = result.lastCompileLog;
             setLastCompileLog(result.lastCompileLog);
           }
           if (result.pdfBase64) {
@@ -772,9 +812,15 @@ export function WorkspacePage() {
       );
       setCompiled(false);
       flash(t("workspace.toastKept"));
-      if (autoCompileRef.current && result.verifyCompile) {
+      if (result.verifyCompile) {
         flash(t("workspace.toastRecompiling"));
-        await compileSnapshot(result.project);
+        const verified = await compileSnapshot(result.project);
+        if (!verified && lastCompileLogRef.current.trim()) {
+          await send(
+            "Repair the first root error from the latest compile log with one minimal source replacement.",
+            "compile-fix",
+          );
+        }
       } else if (autoCompileRef.current) {
         scheduleAutoCompile();
       }
@@ -833,6 +879,89 @@ export function WorkspacePage() {
     scheduleAutoCompile();
   }
 
+  async function importImage(file: File) {
+    const current = projectRef.current;
+    if (!current) return;
+    const extension = file.name.split(".").pop()?.toLowerCase();
+    if (!extension || !IMAGE_EXTENSIONS.has(extension)) {
+      flash(t("files.imageTypeError"));
+      return;
+    }
+
+    let bytes: Uint8Array;
+    try {
+      bytes = new Uint8Array(await file.arrayBuffer());
+    } catch {
+      flash(t("files.imageReadError"));
+      return;
+    }
+
+    const safeName = file.name.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+    const stem = safeName.slice(0, Math.max(0, safeName.length - extension.length - 1)) || "image";
+    const baseName = `${stem}.${extension}`;
+    let imagePath = `figures/${baseName}`;
+    let suffix = 2;
+    while (Object.keys(current.files).some((path) => path.toLowerCase() === imagePath.toLowerCase())) {
+      const dot = baseName.lastIndexOf(".");
+      imagePath = `figures/${baseName.slice(0, dot)}-${suffix}${baseName.slice(dot)}`;
+      suffix += 1;
+    }
+
+    const latest = projectRef.current;
+    if (!latest || latest.id !== current.id) return;
+    const next: Project = {
+      ...latest,
+      updatedAt: new Date().toISOString(),
+      files: { ...latest.files, [imagePath]: encodeBinaryBytes(bytes) },
+      fileOrder: [...(latest.fileOrder ?? Object.keys(latest.files)), imagePath].filter(
+        (path, index, paths) => paths.indexOf(path) === index,
+      ),
+    };
+    setProjectState(next);
+    saveQueueRef.current?.schedule();
+    setCompiled(false);
+    flash(t("files.imageUploaded"));
+  }
+
+  function addImage() {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".png,.jpg,.jpeg,.pdf,image/png,image/jpeg,application/pdf";
+    input.onchange = () => {
+      const file = input.files?.[0];
+      if (file) void importImage(file);
+    };
+    input.click();
+  }
+
+  function onWorkspaceDragEnter(event: DragEvent<HTMLElement>) {
+    if (!Array.from(event.dataTransfer.types).includes("Files")) return;
+    event.preventDefault();
+    imageDragDepthRef.current += 1;
+    setImageDragActive(true);
+  }
+
+  function onWorkspaceDragLeave(event: DragEvent<HTMLElement>) {
+    event.preventDefault();
+    imageDragDepthRef.current = Math.max(0, imageDragDepthRef.current - 1);
+    if (imageDragDepthRef.current === 0) setImageDragActive(false);
+  }
+
+  function onWorkspaceDrop(event: DragEvent<HTMLElement>) {
+    event.preventDefault();
+    imageDragDepthRef.current = 0;
+    setImageDragActive(false);
+    const file = Array.from(event.dataTransfer.files).find((candidate) => {
+      const extension = candidate.name.split(".").pop()?.toLowerCase();
+      return Boolean(extension && IMAGE_EXTENSIONS.has(extension));
+    });
+    if (!file) {
+      flash(t("files.imageTypeError"));
+      return;
+    }
+    void importImage(file);
+  }
+
   function exportProject() {
     const current = projectRef.current;
     if (!current) return;
@@ -881,25 +1010,39 @@ export function WorkspacePage() {
         onApiSettings={() => setProviderOpen(true)}
       />
       <main
-        className="workspace"
+        className={`workspace${imageDragActive ? " is-image-dragging" : ""}`}
+        onDragEnter={onWorkspaceDragEnter}
+        onDragOver={(event) => {
+          if (Array.from(event.dataTransfer.types).includes("Files")) event.preventDefault();
+        }}
+        onDragLeave={onWorkspaceDragLeave}
+        onDrop={onWorkspaceDrop}
         style={{
           gridTemplateColumns: `${filesWidth}px 5px minmax(0, 1fr) 5px ${previewWidth}px`,
         }}
       >
+        {imageDragActive && (
+          <div className="image-drop-indicator" aria-hidden>
+            {t("files.dropImage")}
+          </div>
+        )}
         <FileTree
           files={fileEntries}
           activeFileId={activeFile}
           onSelect={(path) => {
             setActiveFile(path);
             setSelection(undefined);
+            setRevealedSelection(undefined);
+            setCursor(0);
             const content = projectRef.current?.files[path];
             const bytes = content ? decodeBinaryFile(content) : null;
-            if (bytes) {
+            if (bytes && path.toLowerCase().endsWith(".pdf")) {
               setPdfFromBytes(bytes);
               setCompiled(true);
               setCompileFailed(false);
             }
           }}
+          onAddImage={addImage}
           accountLabel={
             auth.status === "authenticated"
               ? auth.displayName || auth.contact || t("common.guest")
@@ -923,7 +1066,12 @@ export function WorkspacePage() {
               fileName={activeFile}
               value={source}
               onChange={editSource}
-              onSelectionChange={setSelection}
+              onSelectionChange={(next) => {
+                setSelection(next);
+                setRevealedSelection(undefined);
+              }}
+              onCursorChange={setCursor}
+              revealSelection={revealedSelection}
               onFixWithAi={fixWithAi}
             />
             {aiOpen && (
@@ -935,6 +1083,11 @@ export function WorkspacePage() {
                 draft={draft}
                 onDraftChange={setDraft}
                 onSend={(text) => void send(text)}
+                onStop={() => {
+                  if (stopProjectAssistant(project.id, t("assistant.stopped"))) {
+                    setSending(false);
+                  }
+                }}
                 quickPrompts={quickPrompts}
                 onKeep={(message) => void keepSuggestion(message)}
                 onUndo={(message) => void undoSuggestion(message)}
@@ -966,6 +1119,7 @@ export function WorkspacePage() {
           authors={preview.authors}
           pdfUrl={pdfUrl}
           compileFailed={compileFailed}
+          onPdfTextSelection={revealPdfSelection}
         />
       </main>
       <ProviderSettingsModal open={providerOpen} onClose={() => setProviderOpen(false)} />

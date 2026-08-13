@@ -39,14 +39,22 @@ export function compiledPdfPath(mainFile: string): string {
   return mainFile.replace(/\.tex$/i, ".pdf");
 }
 
-/** Drop compiled/binary payloads before sending a TeX tree to Tectonic. */
+/** Drop the generated PDF while preserving binary source assets for Tectonic. */
 export function filesForCompile(
   files: Record<string, string>,
+  mainFile?: string,
 ): Record<string, string> {
   const out: Record<string, string> = {};
+  const generatedPdf = mainFile ? compiledPdfPath(mainFile).toLowerCase() : null;
   for (const [path, content] of Object.entries(files)) {
-    if (path.toLowerCase().endsWith(".pdf")) continue;
-    if (isBinaryFileContent(content)) continue;
+    const lowerPath = path.toLowerCase();
+    if (
+      generatedPdf
+        ? lowerPath === generatedPdf
+        : isBinaryFileContent(content) && lowerPath.endsWith(".pdf")
+    ) {
+      continue;
+    }
     out[path] = content;
   }
   return out;

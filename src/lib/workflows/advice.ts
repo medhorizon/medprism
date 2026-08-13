@@ -1,5 +1,5 @@
-import scientificWritingSkill from "../../../skills/scientific-writing/SKILL.md?raw";
-import { formatWorkspaceContext, buildContextSnapshot } from "../context/snapshot";
+import scientificWritingSkill from "../../../skills/staged/scientific-writing/SKILL.md?raw";
+import { formatWorkspaceContext } from "../context/snapshot";
 import { taggedPromptData } from "../promptData";
 import { parseModelWorkflowEnvelope } from "../replyParse";
 import { buildWorkflowSystemPrompt } from "./prompt";
@@ -50,13 +50,7 @@ function softAdviceFromRaw(raw: string): WorkflowResult | null {
 
 /** Advisory Q&A only — never produces a PatchSet. */
 export const runAdviceWorkflow: WorkflowHandler = async (input) => {
-  let contextBlock = "";
-  try {
-    const snapshot = await buildContextSnapshot(input.ctx);
-    contextBlock = formatWorkspaceContext(snapshot);
-  } catch {
-    contextBlock = "";
-  }
+  const contextBlock = formatWorkspaceContext(input.contextPackage);
 
   const raw = await input.services.complete({
     config: input.config,

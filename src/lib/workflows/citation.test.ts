@@ -149,6 +149,31 @@ describe("citation workflow", () => {
     });
   });
 
+  it("resolves bibliography resources from a nested main file directory", async () => {
+    const claim = "This claim needs a source.";
+    const snapshot = await buildContextSnapshot({
+      projectId: "p",
+      files: {
+        "paper/main.tex": `${claim}\n\\bibliography{references}\n\\end{document}\n`,
+      },
+      mainFile: "paper/main.tex",
+      activeFile: "paper/main.tex",
+      selection: { start: 0, end: claim.length },
+    });
+    const built = await buildCitationPatch({
+      snapshot,
+      hits,
+      judgements: [{ candidateId: "123", relation: "supports", selected: true, reason: "abstract" }],
+    });
+    expect(built.ok).toBe(true);
+    if (!built.ok || !built.patchSet) return;
+    expect(built.patchSet.operations[0]).toMatchObject({
+      op: "bib_add",
+      path: "paper/references.bib",
+      mustNotExist: true,
+    });
+  });
+
   it("refuses to guess between multiple active bibliography resources", async () => {
     const claim = "This claim needs a source.";
     const snapshot = await buildContextSnapshot({

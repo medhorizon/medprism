@@ -93,21 +93,6 @@ const trustedHit = {
   doi: "10.1000/trusted",
 };
 
-function targetedDraft(text: string, workflow: "writing" | "polish" = "writing", format: "plain-text" | "latex-body" = "plain-text") {
-  return JSON.stringify({
-    schemaVersion: "1",
-    workflow,
-    summary: "Draft target text",
-    warnings: [],
-    content: "Target text is ready.",
-    textDraft: {
-      text,
-      format,
-      sourceCandidateIds: [trustedHit.id],
-    },
-  });
-}
-
 describe("workflow executor", () => {
   it("registers eight deterministic workflows, including advice and research", () => {
     expect(listWorkflows().sort()).toEqual([
@@ -142,10 +127,14 @@ describe("workflow executor", () => {
         summary: "Revise selected text",
         warnings: [],
         content: "A scoped edit is ready.",
-        textDraft: {
-          text: "Revised sentence.",
-          format: "plain-text",
-          sourceCandidateIds: [],
+        patchProposal: {
+          schemaVersion: "1",
+          summary: "Revise selected text",
+          operations: [{
+            op: "replace_text",
+            oldText: "Original sentence.",
+            newText: "Revised sentence.",
+          }],
         },
       })],
       onModel: (system) => { systemPrompt = system; },
@@ -159,14 +148,63 @@ describe("workflow executor", () => {
     });
     expect(ctx.files["main.tex"]).toBe("Original sentence.");
     expect((systemPrompt.match(/# Selected skill:/g) ?? [])).toHaveLength(1);
+    expect(systemPrompt).toContain("# Scientific Writing");
+  });
+
+  it("lets the model distinguish source context from the requested destination", async () => {
+    const source = [
+      "\\documentclass{article}",
+      "\\title{Existing title}",
+      "\\begin{document}",
+      "\\section{Introduction}",
+      "Old introduction.",
+      "\\end{document}",
+    ].join("\n");
+    const ctx = context({ source });
+    const result = await executeWorkflow({
+      request: requestFor("基于标题写一个引言", {
+        activeFile: "main.tex",
+        mainFile: "main.tex",
+      }),
+      config,
+      history: [],
+      ctx,
+    }, services({
+      modelResponses: [JSON.stringify({
+        schemaVersion: "1",
+        workflow: "writing",
+        summary: "Write introduction",
+        warnings: [],
+        content: "An introduction edit is ready.",
+        patchProposal: {
+          schemaVersion: "1",
+          summary: "Write introduction",
+          operations: [{
+            op: "replace_text",
+            oldText: "Old introduction.",
+            newText: "New introduction based on the manuscript title.",
+          }],
+        },
+      })],
+    }));
+
+    if (!result.agent.patch) throw new Error("Expected an introduction patch");
+    const simulated = await simulatePatchSet({ ...ctx.files }, result.agent.patch);
+    expect(simulated.ok).toBe(true);
+    if (simulated.ok) {
+      expect(simulated.simulation.nextFiles["main.tex"]).toContain("\\title{Existing title}");
+      expect(simulated.simulation.nextFiles["main.tex"]).toContain(
+        "New introduction based on the manuscript title.",
+      );
+    }
   });
 
   it.each([
-    ["帮我调研 HCC 并写一个摘要", "abstract", "New abstract text grounded in trusted literature."],
-    ["调研 HCC 后撰写 Methods", "methods", "New methods prose grounded in trusted literature."],
-    ["调研 HCC 并写 Discussion", "discussion", "New discussion prose grounded in trusted literature."],
-    ["调研 HCC 并完善 Funding", "funding", "Funding was provided by the institutional research programme."],
-  ] as const)("runs research once, writes %s, and produces a LaTeX patch", async (userText, targetKind, draftedText) => {
+    ["帮我调研 HCC 并写一个摘要", "abstract", "New abstract text grounded in trusted literature.", "Old abstract."],
+    ["调研 HCC 后撰写 Methods", "methods", "New methods prose grounded in trusted literature.", "Old methods."],
+    ["调研 HCC 并写 Discussion", "discussion", "New discussion prose grounded in trusted literature.", "Old discussion."],
+    ["调研 HCC 并完善 Funding", "funding", "Funding was provided by the institutional research programme.", "Old funding."],
+  ] as const)("runs research once, lets the model target %s, and produces a LaTeX patch", async (userText, targetKind, draftedText, oldText) => {
     const source = [
       "\\documentclass{article}",
       "\\begin{document}",
@@ -190,14 +228,26 @@ describe("workflow executor", () => {
       ctx,
     }, services({
       toolResult: { ok: true, data: { query: "HCC", hits: [trustedHit] } },
-      modelResponses: [targetedDraft(draftedText)],
+      modelResponses: [JSON.stringify({
+        schemaVersion: "1",
+        workflow: "writing",
+        summary: `Write ${targetKind}`,
+        warnings: [],
+        content: "A scoped edit is ready.",
+        researchUse: { sourceCandidateIds: [trustedHit.id] },
+        patchProposal: {
+          schemaVersion: "1",
+          summary: `Write ${targetKind}`,
+          operations: [{ op: "replace_text", oldText, newText: draftedText }],
+        },
+      })],
       onTool: () => events.push("research"),
       onModel: () => events.push("model"),
     }));
 
     expect(events).toEqual(["research", "model"]);
     expect(result.agent.patch?.verify?.compile).toBe(true);
-    expect(result.toolNotes).toContain(`latex-target:${targetKind}:main.tex`);
+    expect(result.toolNotes).toContain("workflow:writing");
     if (!result.agent.patch) throw new Error("Expected a LaTeX patch");
     const simulated = await simulatePatchSet({ ...ctx.files }, result.agent.patch);
     expect(simulated.ok).toBe(true);
@@ -224,10 +274,27 @@ describe("workflow executor", () => {
       ctx,
     }, services({
       toolResult: { ok: true, data: { hits: [trustedHit] } },
-      modelResponses: [targetedDraft("The available evidence remains limited by study heterogeneity.")],
+      modelResponses: [JSON.stringify({
+        schemaVersion: "1",
+        workflow: "writing",
+        summary: "Add Limitations",
+        warnings: [],
+        content: "A Limitations section is ready.",
+        researchUse: { sourceCandidateIds: [trustedHit.id] },
+        patchProposal: {
+          schemaVersion: "1",
+          summary: "Add Limitations",
+          operations: [{
+            op: "insert_before",
+            anchor: "\\end{document}",
+            text: "\\section{Limitations}\nThe available evidence remains limited by study heterogeneity.\n",
+            targetKind: "section",
+          }],
+        },
+      })],
     }));
 
-    expect(result.toolNotes).toContain("latex-target:section:main.tex");
+    expect(result.toolNotes).toContain("workflow:writing");
     if (!result.agent.patch) throw new Error("Expected a custom-section patch");
     const simulated = await simulatePatchSet({ ...ctx.files }, result.agent.patch);
     expect(simulated.ok).toBe(true);
@@ -252,11 +319,23 @@ describe("workflow executor", () => {
       ctx,
     }, services({
       toolResult: { ok: true, data: { hits: [trustedHit] } },
-      modelResponses: [targetedDraft(
-        "We enrolled a total of 20 patients \\cite{trustedOld}.",
-        "polish",
-        "latex-body",
-      )],
+      modelResponses: [JSON.stringify({
+        schemaVersion: "1",
+        workflow: "polish",
+        summary: "Polish selected claim",
+        warnings: [],
+        content: "A scoped edit is ready.",
+        researchUse: { sourceCandidateIds: [trustedHit.id] },
+        patchProposal: {
+          schemaVersion: "1",
+          summary: "Polish selected claim",
+          operations: [{
+            op: "replace_text",
+            oldText: selected,
+            newText: "We enrolled a total of 20 patients \\cite{trustedOld}.",
+          }],
+        },
+      })],
     }));
 
     expect(result.agent.patch?.operations[0]).toMatchObject({
@@ -282,7 +361,23 @@ describe("workflow executor", () => {
       ctx,
     }, services({
       toolResult: { ok: true, data: { hits: [trustedHit] } },
-      modelResponses: [targetedDraft("We enrolled patients.", "polish")],
+      modelResponses: [JSON.stringify({
+        schemaVersion: "1",
+        workflow: "polish",
+        summary: "Polish selected claim",
+        warnings: [],
+        content: "A scoped edit is ready.",
+        researchUse: { sourceCandidateIds: [trustedHit.id] },
+        patchProposal: {
+          schemaVersion: "1",
+          summary: "Polish selected claim",
+          operations: [{
+            op: "replace_text",
+            oldText: selected,
+            newText: "We enrolled patients.",
+          }],
+        },
+      })],
     }));
 
     expect(result.agent.patch).toBeUndefined();

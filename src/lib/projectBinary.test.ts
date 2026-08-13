@@ -36,6 +36,26 @@ describe("projectBinary", () => {
     });
   });
 
+  it("keeps uploaded binary images and non-generated PDFs for compilation", () => {
+    const image = encodeBinaryBase64("iVBORw0KGgo=");
+    const figurePdf = encodeBinaryBase64("JVBERi0x");
+    expect(
+      filesForCompile(
+        {
+          "main.tex": "\\includegraphics{figures/result.png}",
+          "main.pdf": encodeBinaryBase64("JVBERi0x"),
+          "figures/result.png": image,
+          "figures/supplement.pdf": figurePdf,
+        },
+        "main.tex",
+      ),
+    ).toEqual({
+      "main.tex": "\\includegraphics{figures/result.png}",
+      "figures/result.png": image,
+      "figures/supplement.pdf": figurePdf,
+    });
+  });
+
   it("exports binary files as raw bytes", () => {
     const encoded = encodeBinaryBase64(btoa("PDFDATA"));
     expect(fileBytesForExport(encoded)).toEqual(new TextEncoder().encode("PDFDATA"));

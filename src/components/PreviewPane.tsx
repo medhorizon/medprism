@@ -1,5 +1,7 @@
 import { useMemo } from "react";
 import { useI18n } from "../i18n/context";
+import { PdfPreview } from "./PdfPreview";
+import type { PdfTextSelection } from "./pdfSelection";
 
 type PreviewPaneProps = {
   compiling: boolean;
@@ -11,6 +13,7 @@ type PreviewPaneProps = {
   /** Object URL or data URL for compiled PDF */
   pdfUrl?: string | null;
   compileFailed?: boolean;
+  onPdfTextSelection?: (selection: PdfTextSelection) => void;
 };
 
 export function PreviewPane({
@@ -22,6 +25,7 @@ export function PreviewPane({
   authors,
   pdfUrl,
   compileFailed,
+  onPdfTextSelection,
 }: PreviewPaneProps) {
   const { t } = useI18n();
   const pages = useMemo(
@@ -118,11 +122,10 @@ export function PreviewPane({
 
       <div className="preview-stage" aria-label={t("preview.title")}>
         {pdfUrl ? (
-          <iframe
-            className="pdf-frame"
+          <PdfPreview
             title={t("preview.pdfReady")}
-            src={pdfUrl}
-            style={{ width: "100%", height: "100%", border: 0, background: "#525659" }}
+            pdfUrl={pdfUrl}
+            onTextSelection={onPdfTextSelection}
           />
         ) : (
           <div className="pdf-scroll-column" style={{ width: `${pageW}px` }}>

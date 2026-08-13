@@ -13,6 +13,8 @@ describe("context snapshot", () => {
     expect(snapshot.memoryNotes).toBe("Prefer cohort wording");
     expect(formatWorkspaceContext(snapshot)).toContain("projectMemoryNotes");
     expect(formatWorkspaceContext(snapshot)).toContain("Prefer cohort wording");
+    expect(formatWorkspaceContext(snapshot)).toContain("fileTree");
+    expect(formatWorkspaceContext(snapshot)).toContain("mainDocument");
   });
 
   it("computes selected text from the active file, including surrogate pairs", async () => {

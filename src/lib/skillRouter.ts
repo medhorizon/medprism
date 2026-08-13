@@ -6,7 +6,6 @@
  * This remains a linear product workflow, not a general planner or DAG.
  */
 import { isBlankScaffoldIntent } from "./latex/scaffoldModules";
-import type { LatexTargetSpec } from "./latex/types";
 import type { ResearchPurpose, ResearchSpec } from "./research/types";
 import type { WorkflowKind, WorkflowPlan } from "./workflows/types";
 
@@ -54,9 +53,6 @@ const WRITING_ACTION_RE =
 /** Multi-block blank scaffolds / submission checklists — writing, not citation/research. */
 const STRUCTURAL_SCAFFOLD_RE =
   /准备(?:一下)?(?:模块|结构|框架|骨架|声明)|(?:这些)?模块(?:作为|写入)|(?:作为\s*)?LaTeX\s*结构|搭(?:建)?骨架|结构写入|检查结构|补(?:齐|上|充)?结构|(?:内容|正文)?(?:暂时|先)?(?:为|设为|设置|未)?(?:空白|留空)|内容留空|先留白|留白占位|空壳|占位(?:符|块|段)?|投稿(?:前)?(?:材料|清单|要件)|声明部分|补充材料|title page|author guidelines|(?:准备|搭建|补齐).{0,24}scientific reports/i;
-const SELECTION_RE =
-  /这段|这句|这句话|选区|所选|selected\s+(?:text|paragraph|sentence)|this\s+(?:paragraph|sentence|selection)/i;
-
 export function isStructuralScaffoldRequest(text: string): boolean {
   const writingish =
     WRITING_ACTION_RE.test(text) || /写入|插入|insert\b|add\b/i.test(text);
@@ -92,24 +88,6 @@ const COMMAND_WORKFLOWS: Array<{ pattern: RegExp; kind: WorkflowKind }> = [
   { pattern: /^\s*\/(?:latex|format)\b/i, kind: "latex" },
   { pattern: /^\s*\/(?:write|writing|draft|revise)\b/i, kind: "writing" },
   { pattern: /^\s*\/(?:ask|advice|help)\b/i, kind: "advice" },
-];
-
-const TARGET_PATTERNS: Array<{ pattern: RegExp; target: LatexTargetSpec }> = [
-  { pattern: /摘要|abstract/i, target: { kind: "abstract", createIfMissing: true } },
-  { pattern: /标题|题目|title/i, target: { kind: "title", createIfMissing: true } },
-  { pattern: /关键词|关键字|keywords?/i, target: { kind: "keywords", createIfMissing: true } },
-  { pattern: /引言|绪论|背景部分|introduction/i, target: { kind: "introduction", createIfMissing: true } },
-  { pattern: /材料与方法|患者与方法|研究方法|方法学|方法部分|methods?|methodology|materials?\s+and\s+methods?/i, target: { kind: "methods", createIfMissing: true } },
-  { pattern: /结果部分|研究结果|results?/i, target: { kind: "results", createIfMissing: true } },
-  { pattern: /讨论部分|discussion/i, target: { kind: "discussion", createIfMissing: true } },
-  { pattern: /结论部分|结语|conclusions?/i, target: { kind: "conclusion", createIfMissing: true } },
-  { pattern: /基金|资助|funding|financial support/i, target: { kind: "funding", createIfMissing: true } },
-  { pattern: /致谢|acknowledg(?:e)?ments?/i, target: { kind: "acknowledgements", createIfMissing: true } },
-  { pattern: /作者贡献|作者分工|author contributions?/i, target: { kind: "author-contributions", createIfMissing: true } },
-  { pattern: /数据可用性|数据共享|data availability/i, target: { kind: "data-availability", createIfMissing: true } },
-  { pattern: /伦理声明|伦理审批|ethics approval|ethical approval/i, target: { kind: "ethics", createIfMissing: true } },
-  { pattern: /利益冲突|竞争性利益|conflicts? of interest|competing interests?/i, target: { kind: "conflict-of-interest", createIfMissing: true } },
-  { pattern: /正文|主体内容|document body|main body/i, target: { kind: "body", createIfMissing: true } },
 ];
 
 function cleanResearchTopic(value: string): string {
@@ -160,40 +138,6 @@ export function extractResearchQuery(text: string): string {
   const query = cleanResearchTopic(beforeAction);
   if (/^(?:相关)?(?:文献|资料)?$/i.test(query)) return "";
   return query;
-}
-
-export function detectLatexTarget(text: string): LatexTargetSpec | undefined {
-  if (SELECTION_RE.test(text)) return { kind: "selection", createIfMissing: false };
-
-  // A research topic containing words such as “methods” must not silently
-  // become a manuscript edit. Infer a structural target only for an explicit
-  // text-changing request.
-  const targetAction =
-    WRITING_ACTION_RE.test(text) ||
-    POLISH_RE.test(text) ||
-    CITATION_RE.test(text) ||
-    /写入|插入|放入|放到|填充|增加引用|补引用|add\s+to|insert\s+into|put\s+in/i.test(text);
-  if (!targetAction) return undefined;
-
-  // Multi-block scaffold / submission checklists must not collapse to one target
-  // (e.g. first hit “摘要”) — let writing emit multiple structural inserts instead.
-  if (isStructuralScaffoldRequest(text)) return undefined;
-
-  const knownMatches = TARGET_PATTERNS.filter((candidate) => candidate.pattern.test(text));
-  const uniqueKinds = new Set(knownMatches.map((match) => match.target.kind));
-  // Long requirement lists without an explicit single-section verb are multi-target.
-  // Provided multi-section pastes are applied by runtime section-fill, not this target.
-  if (uniqueKinds.size >= 3) return undefined;
-  const known = knownMatches[0];
-  if (known) return { ...known.target };
-
-  const custom = text.match(
-    /(?:写|撰写|起草|生成|完善|修改|润色|write|draft|prepare|compose|revise|polish)(?:一份|一个|一段|\s+an?|\s+the)?\s*[“"']?([^“”"'，。]{2,50})[”"']?\s*(?:部分|章节|section)(?:\s|[，。！？,.!?]|$)/i,
-  )?.[1];
-  const sectionTitle = custom?.trim();
-  return sectionTitle
-    ? { kind: "section", sectionTitle, createIfMissing: true }
-    : undefined;
 }
 
 export function isNatureWritingRequest(text: string): boolean {
@@ -277,8 +221,6 @@ function planFor(kind: WorkflowKind, text: string): WorkflowPlan {
   }
 
   const research = researchSpecFor(kind, text);
-  const target =
-    kind === "research" || kind === "review" ? undefined : detectLatexTarget(text);
   const applyToLatex =
     kind === "writing" ||
     kind === "polish" ||
@@ -299,7 +241,6 @@ function planFor(kind: WorkflowKind, text: string): WorkflowPlan {
     primary: kind,
     steps,
     ...(research ? { research } : {}),
-    ...(target ? { target } : {}),
     applyToLatex,
   };
 }
@@ -326,9 +267,8 @@ function routeResult(args: {
  * Routing priority: explicit UI → slash command → legacy intent →
  * LLM closed-set classification for all other natural-language turns.
  *
- * Regex helpers still shape the *plan* (targets, research, blank-scaffold detection)
- * after a kind is chosen. Runtime may override the handler for blank scaffolds
- * without skipping the classifier (see `applyRuntimeScaffoldGuard`).
+ * Regex helpers still shape the *plan* (research and blank-scaffold detection)
+ * after a kind is chosen.
  */
 export function routeWorkflow(input: WorkflowRouteInput): WorkflowRoute {
   const text = input.text.trim();
@@ -376,33 +316,6 @@ export function routeWorkflow(input: WorkflowRouteInput): WorkflowRoute {
     reviseProse: false,
     needsLlmClassification: true,
   });
-}
-
-/**
- * After LLM (or provisional) routing: blank-shell requests always execute as
- * writing + runtime scaffold. Does not override explicit UI / slash commands.
- */
-export function applyRuntimeScaffoldGuard(args: {
-  route: WorkflowRoute;
-  userText: string;
-  /** True when the user/UI/command already locked the workflow. */
-  locked: boolean;
-}): { route: WorkflowRoute; overridden: boolean; fromKind: WorkflowKind } {
-  const fromKind = args.route.kind;
-  if (args.locked || !isStructuralScaffoldRequest(args.userText)) {
-    return { route: args.route, overridden: false, fromKind };
-  }
-  if (fromKind === "writing" && args.route.plan.applyToLatex) {
-    return { route: args.route, overridden: false, fromKind };
-  }
-  return {
-    route: routeWorkflow({
-      text: args.userText,
-      explicitWorkflow: "writing",
-    }),
-    overridden: true,
-    fromKind,
-  };
 }
 
 export function detectWritingDomain(

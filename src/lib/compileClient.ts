@@ -5,6 +5,7 @@ export type CompileRequest = {
   files: Record<string, string>;
   mainFile: string;
   projectRevision?: string;
+  synctex?: boolean;
 };
 
 export type CompileResult = {
@@ -14,6 +15,7 @@ export type CompileResult = {
   code?: string;
   log: string;
   pdfBase64?: string;
+  synctexBase64?: string;
   error?: string;
   projectRevision?: string;
 };
@@ -24,7 +26,7 @@ export async function compileProject(
 ): Promise<CompileResult> {
   const compileRequest: CompileRequest = {
     ...request,
-    files: filesForCompile(request.files),
+    files: filesForCompile(request.files, request.mainFile),
   };
   if (window.medprismDesktop?.compile) {
     if (signal?.aborted) {

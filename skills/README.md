@@ -2,6 +2,13 @@
 
 Skills are focused model instructions. They are **not** business workflows and do not decide tool order, file writes, or validation.
 
+## Current status
+
+Replacement domain-only skills under `skills/staged/` are active. Each model
+call receives Base Policy, the active Workflow Instruction, required
+Capability Instructions, exactly one primary staged Skill, and the
+ContextPackage. Current skills under `skills/*` are not imported.
+
 ## Deterministic workflows
 
 | Workflow | Primary Skill per model call | Runtime-owned steps |
@@ -41,3 +48,4 @@ A combined request such as “润色并补引用” remains one deterministic ci
 |---|---|
 | Upstream source copies | `.agents/skills/*` |
 | MedPrism runtime adaptations | `skills/*` |
+| Active replacement skills | `skills/staged/*` |

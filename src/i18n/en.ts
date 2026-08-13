@@ -125,6 +125,11 @@ export const en: Messages = {
   "topbar.autoCompileOff": "Auto-compile disabled",
   "topbar.apiSettings": "API",
   "files.title": "Files",
+  "files.addImage": "Add image",
+  "files.imageTypeError": "Use a PNG, JPG, JPEG, or PDF image.",
+  "files.imageReadError": "The image file could not be read.",
+  "files.imageUploaded": "Image uploaded. Describe where it belongs.",
+  "files.dropImage": "Drop to upload image",
   "source.title": "Source",
   "source.fixAi": "Fix with AI",
   "source.binaryPdf":
@@ -154,6 +159,8 @@ export const en: Messages = {
   "assistant.undoConflict": "File edited after Keep — cannot safely undo",
   "assistant.placeholder": "Ask anything…",
   "assistant.send": "Send",
+  "assistant.stop": "Stop generating",
+  "assistant.stopped": "Generation stopped.",
   "assistant.initial":
     "Your manuscript is loaded. Ask me to polish prose, align terminology, check citations and LaTeX, or tune wording for a target journal.",
   "assistant.q1": "Polish the article",

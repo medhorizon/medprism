@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type ChangeEvent,
@@ -8,6 +9,7 @@ import {
 } from "react";
 import { useI18n } from "../i18n/context";
 import { MAX_PROJECT_MEMORY_CHARS } from "../lib/projectMemory";
+import { splitTextDiff } from "../lib/diffPreview";
 import type { ChatMessage } from "../types/chat";
 
 type AssistantCardProps = {
@@ -18,6 +20,7 @@ type AssistantCardProps = {
   draft: string;
   onDraftChange: (value: string) => void;
   onSend: (text: string) => void;
+  onStop: () => void;
   quickPrompts: string[];
   onKeep: (message: ChatMessage) => void;
   onUndo: (message: ChatMessage) => void;
@@ -34,15 +37,25 @@ function IconSend() {
   );
 }
 
+function IconStop() {
+  return <span className="stop-icon" aria-hidden />;
+}
+
 export function AssistantCard(props: AssistantCardProps) {
   const { t } = useI18n();
   const dragRef = useRef<{ startY: number; startH: number } | null>(null);
+  const threadRef = useRef<HTMLDivElement>(null);
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [memoryDraft, setMemoryDraft] = useState(props.memoryNotes ?? "");
 
   useEffect(() => {
     setMemoryDraft(props.memoryNotes ?? "");
   }, [props.memoryNotes]);
+
+  useLayoutEffect(() => {
+    const thread = threadRef.current;
+    if (thread) thread.scrollTop = thread.scrollHeight;
+  }, [props.chat]);
 
   function flushMemory(next: string = memoryDraft) {
     props.onMemoryNotesChange?.(next);
@@ -118,7 +131,7 @@ export function AssistantCard(props: AssistantCardProps) {
               />
             </div>
           )}
-          <div className="ai-thread">
+          <div className="ai-thread" ref={threadRef}>
             {props.chat.map((message) => {
               const suggestion = message.suggestion;
               const status = suggestion?.status ?? "pending";
@@ -136,15 +149,17 @@ export function AssistantCard(props: AssistantCardProps) {
                       {suggestion.patchError && <div className="suggestion-error" role="alert">{t("assistant.patchNeedRegen")}: {suggestion.patchError.message}</div>}
                       {suggestion.previews?.length ? (
                         <div className="suggestion-diffs">
-                          {suggestion.previews.map((preview, index) => (
+                          {suggestion.previews.map((preview, index) => {
+                            const diff = splitTextDiff(preview.before, preview.after);
+                            return (
                             <div key={`${preview.path}-${preview.op}-${index}`} className="suggestion-diff">
                               <div className="suggestion-diff-meta"><span className="suggestion-diff-op">{preview.op}</span><span className="suggestion-diff-path">{preview.path}</span></div>
                               <div className="suggestion-diff-label">before</div>
-                              <pre className="suggestion-diff-block is-before">{preview.before}</pre>
+                              <pre className="suggestion-diff-block is-before">{diff.prefix}<mark>{diff.beforeChanged}</mark>{diff.suffix}</pre>
                               <div className="suggestion-diff-label">after</div>
-                              <pre className="suggestion-diff-block is-after">{preview.after}</pre>
+                              <pre className="suggestion-diff-block is-after">{diff.prefix}<mark>{diff.afterChanged}</mark>{diff.suffix}</pre>
                             </div>
-                          ))}
+                          )})}
                         </div>
                       ) : <div className="suggestion-body">{suggestion.body}</div>}
                       <div className="suggestion-actions">
@@ -161,7 +176,11 @@ export function AssistantCard(props: AssistantCardProps) {
             <div className="prompt-chips">{props.quickPrompts.map((prompt) => <button key={prompt} className="chip" type="button" onClick={() => props.onSend(prompt)}>{prompt}</button>)}</div>
             <div className="composer-box">
               <textarea className="composer-input" placeholder={t("assistant.placeholder")} value={props.draft} rows={1} onChange={(event: ChangeEvent<HTMLTextAreaElement>) => props.onDraftChange(event.currentTarget.value)} onKeyDown={(event: KeyboardEvent<HTMLTextAreaElement>) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); props.onSend(props.draft); } }} />
-              <button className="send-btn" type="button" disabled={!props.draft.trim() || Boolean(props.sending)} onClick={() => props.onSend(props.draft)} aria-label={t("assistant.send")}><IconSend /></button>
+              {props.sending ? (
+                <button className="send-btn is-stop" type="button" onClick={props.onStop} aria-label={t("assistant.stop")} title={t("assistant.stop")}><IconStop /></button>
+              ) : (
+                <button className="send-btn" type="button" disabled={!props.draft.trim()} onClick={() => props.onSend(props.draft)} aria-label={t("assistant.send")}><IconSend /></button>
+              )}
             </div>
           </div>
         </div>

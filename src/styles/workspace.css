@@ -198,6 +198,38 @@
   position: relative;
 }
 
+.image-drop-indicator {
+  position: absolute;
+  inset: 12px;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  border: 2px dashed #16794a;
+  background: rgba(255, 255, 255, 0.94);
+  color: #075f37;
+  font-size: 15px;
+  font-weight: 650;
+  pointer-events: none;
+}
+
+.workspace.is-image-dragging > :not(.image-drop-indicator) {
+  opacity: 0.55;
+}
+
+.editor-image {
+  display: grid;
+  place-items: center;
+  overflow: auto;
+  background: var(--surface-muted);
+}
+
+.editor-image img {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+}
+
 .panel {
   min-width: 0;
   min-height: 0;
@@ -868,13 +900,82 @@
 }
 
 .suggestion-diff-block.is-before {
-  background: #fff4f4;
+  background: #fffafa;
   border: 1px solid rgba(180, 60, 60, 0.18);
 }
 
+.pdfjs-preview {
+  width: 100%;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  padding: 16px;
+  box-sizing: border-box;
+  background: #525659;
+  overflow: auto;
+}
+
+.pdfjs-page {
+  position: relative;
+  flex: none;
+  overflow: hidden;
+  background: white;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+}
+
+.pdfjs-page canvas {
+  display: block;
+}
+
+.pdfjs-text-layer {
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+  line-height: 1;
+  text-align: initial;
+  transform-origin: 0 0;
+  -webkit-text-size-adjust: none;
+  text-size-adjust: none;
+}
+
+.pdfjs-text-layer :is(span, br) {
+  position: absolute;
+  color: transparent;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0 0;
+}
+
+.pdfjs-text-layer ::selection {
+  background: rgba(30, 103, 210, 0.35);
+}
+
+.pdfjs-message {
+  margin: auto;
+  color: white;
+}
+
 .suggestion-diff-block.is-after {
-  background: #f3fff5;
+  background: #fafffb;
   border: 1px solid rgba(40, 140, 70, 0.18);
+}
+
+.suggestion-diff-block mark {
+  padding: 0;
+  background: transparent;
+  font-weight: 650;
+}
+
+.suggestion-diff-block.is-before mark {
+  color: #b42318;
+  background: #ffe2df;
+}
+
+.suggestion-diff-block.is-after mark {
+  color: #08783e;
+  background: #d9f7e5;
 }
 
 .suggestion-actions {
@@ -973,6 +1074,17 @@
 
 .send-btn:not(:disabled):hover {
   background: #000;
+}
+
+.send-btn.is-stop {
+  background: var(--ink);
+}
+
+.stop-icon {
+  width: 9px;
+  height: 9px;
+  border-radius: 1px;
+  background: currentColor;
 }
 
 .toast {

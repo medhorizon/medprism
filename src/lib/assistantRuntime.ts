@@ -3,7 +3,6 @@ import type {
   LlmConfig,
 } from "./llmClient";
 import {
-  applyRuntimeScaffoldGuard,
   detectSkillIntent,
   routeWorkflow,
   type SkillIntent,
@@ -23,6 +22,11 @@ import {
   type ToolContext,
 } from "../tools";
 import type { ChatMessage, ChatSuggestion } from "../types/chat";
+import {
+  buildContextPackage,
+  deriveConversationContext,
+  injectContextPackage,
+} from "./context/snapshot";
 
 ensureToolsRegistered();
 
@@ -65,17 +69,6 @@ function workflowRequestFromRuntime(
   req: RuntimeRequest,
   route: WorkflowRoute,
 ): WorkflowRequest {
-  const selectionTarget =
-    !route.plan.target &&
-    req.ctx.selection &&
-    (route.kind === "writing" || route.kind === "polish")
-      ? { kind: "selection" as const }
-      : undefined;
-  const plan = {
-    ...route.plan,
-    ...(selectionTarget ? { target: selectionTarget } : {}),
-  };
-
   return {
     kind: route.kind,
     userText: req.userText,
@@ -85,11 +78,20 @@ function workflowRequestFromRuntime(
     ...(req.ctx.mainFile ? { mainFile: req.ctx.mainFile } : {}),
     ...(req.ctx.lastCompileLog ? { lastCompileLog: req.ctx.lastCompileLog } : {}),
     ...(route.reviseProse ? { reviseProse: true } : {}),
-    plan,
+    plan: route.plan,
   };
 }
 
 export async function runAssistant(req: RuntimeRequest): Promise<RuntimeResult> {
+  const contextPackage = await buildContextPackage({
+    ...req.ctx,
+    conversationContext: deriveConversationContext({
+      history: req.history,
+      userText: req.userText,
+      files: req.ctx.files,
+      existing: req.ctx.conversationContext,
+    }),
+  });
   const explicitWorkflow = req.workflow && req.workflow !== "auto"
     ? req.workflow
     : req.mode === "review"
@@ -100,14 +102,13 @@ export async function runAssistant(req: RuntimeRequest): Promise<RuntimeResult> 
     ...(explicitWorkflow ? { explicitWorkflow } : {}),
     ...(req.intent !== undefined ? { legacyIntent: req.intent } : {}),
   });
-  const routeLocked = route.source === "ui" || route.source === "command";
   let routeNote = `route:${route.source}:${route.kind}`;
 
   if (route.needsLlmClassification) {
     const classified = await classifyWorkflowKind({
       config: req.config,
       userText: req.userText,
-      history: req.history,
+      history: injectContextPackage(req.history, contextPackage),
       ...(req.signal ? { signal: req.signal } : {}),
     });
     route = routeWorkflow({
@@ -117,22 +118,12 @@ export async function runAssistant(req: RuntimeRequest): Promise<RuntimeResult> 
     routeNote = `route:llm:${classified.kind}:${classified.source}`;
   }
 
-  // Classifier may label blank-shell prep as advice/polish; runtime still owns scaffolding.
-  const guarded = applyRuntimeScaffoldGuard({
-    route,
-    userText: req.userText,
-    locked: routeLocked,
-  });
-  route = guarded.route;
-  if (guarded.overridden) {
-    routeNote = `${routeNote}+runtime:scaffold(from:${guarded.fromKind})`;
-  }
-
   const result = await executeWorkflow({
     request: workflowRequestFromRuntime(req, route),
     config: req.config,
     history: req.history,
     ctx: req.ctx,
+    contextPackage,
     ...(req.onDelta ? { onDelta: req.onDelta } : {}),
     ...(req.signal ? { signal: req.signal } : {}),
   });

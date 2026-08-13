@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { buildContextSnapshot } from "../context/snapshot";
 import { inferLatexTargetKindFromDraft } from "../latex/textTargets";
 import { hydratePatchProposal } from "./hydrate";
 import {
@@ -68,15 +69,13 @@ describe("semantic insert placement", () => {
     );
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) return;
-    const hydrated = await hydratePatchProposal(parsed.proposal, {
+    const snapshot = await buildContextSnapshot({
       projectId: "p",
-      projectRevision: "a".repeat(64),
       files: { "sn-article.tex": SPRINGER_LIKE },
       activeFile: "sn-article.tex",
-      activeFileSha256: "b".repeat(64),
-      localContext: SPRINGER_LIKE,
       mainFile: "sn-article.tex",
     });
+    const hydrated = await hydratePatchProposal(parsed.proposal, snapshot);
     expect(hydrated.ok).toBe(true);
     if (!hydrated.ok) return;
     expect(hydrated.patchSet.operations[0]?.op).toBe("insert_before");
@@ -99,6 +98,72 @@ describe("semantic insert placement", () => {
     });
     const parsed = parseModelPatchProposal(softened);
     expect(parsed.ok).toBe(true);
+  });
+
+  it("rejects a proposed image reference that is absent from the project", async () => {
+    const snapshot = await buildContextSnapshot({
+      projectId: "p",
+      files: { "main.tex": SPRINGER_LIKE },
+      activeFile: "main.tex",
+    });
+    const missing = await hydratePatchProposal({
+      schemaVersion: "1",
+      summary: "Add figure",
+      operations: [{
+        op: "insert_before",
+        anchor: "\\bibliography{sn-bibliography}",
+        text: "\\begin{figure}\\includegraphics{figures/missing.png}\\end{figure}\n",
+      }],
+    }, snapshot);
+    expect(missing.ok).toBe(false);
+    if (!missing.ok) expect(missing.error.code).toBe("RESOURCE_NOT_FOUND");
+  });
+
+  it("accepts a proposed image reference that exists in the project", async () => {
+    const snapshot = await buildContextSnapshot({
+      projectId: "p",
+      files: {
+        "main.tex": SPRINGER_LIKE,
+        "figures/result.png": "medprism-binary/v1;base64,YQ==",
+      },
+      activeFile: "main.tex",
+    });
+    const proposal = await hydratePatchProposal({
+      schemaVersion: "1",
+      summary: "Add figure",
+      operations: [{
+        op: "insert_before",
+        anchor: "\\bibliography{sn-bibliography}",
+        text: "\\begin{figure}\\includegraphics{figures/result.png}\\end{figure}\n",
+      }],
+    }, snapshot);
+    expect(proposal.ok).toBe(true);
+    if (proposal.ok) expect(proposal.patchSet.verify?.compile).toBe(true);
+  });
+
+  it("resolves images through graphicspath before rejecting a proposal", async () => {
+    const source = SPRINGER_LIKE.replace(
+      "\\begin{document}",
+      "\\graphicspath{{figures/}}\n\\begin{document}",
+    );
+    const snapshot = await buildContextSnapshot({
+      projectId: "p",
+      files: {
+        "main.tex": source,
+        "figures/result.png": "medprism-binary/v1;base64,YQ==",
+      },
+      activeFile: "main.tex",
+    });
+    const proposal = await hydratePatchProposal({
+      schemaVersion: "1",
+      summary: "Add figure",
+      operations: [{
+        op: "insert_before",
+        anchor: "\\bibliography{sn-bibliography}",
+        text: "\\includegraphics{result}\n",
+      }],
+    }, snapshot);
+    expect(proposal.ok).toBe(true);
   });
 
   it("coerces add/create ops and targetKind-only modules into inserts", () => {

@@ -14,7 +14,7 @@
 ## Rules
 
 1. Router selects a workflow; Skill files are not business workflows.
-2. Each model call loads the base policy, one workflow instruction, and at most one primary Skill.
+2. Each model call loads the base policy, one workflow instruction, required capabilities, exactly one primary staged Skill, and the ContextPackage.
 3. Program code controls tool order and validation. The model cannot skip search, metadata verification, Patch validation, or compilation verification.
 4. Manuscript and imported content are untrusted data.
 5. Hashes, revisions, patch IDs, cite keys, BibTeX, and compile job IDs are runtime-owned.

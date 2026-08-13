@@ -4,7 +4,12 @@ import { compileProject } from "../../electron/compile/core.mjs";
 
 const PORT = Number(process.env.PORT || 8788);
 const MAX_BODY_BYTES = 25 * 1024 * 1024;
-const ALLOWED_ORIGIN = process.env.MEDPRISM_DEV_ORIGIN || "http://localhost:5173";
+const ALLOWED_ORIGINS = new Set(
+  (process.env.MEDPRISM_DEV_ORIGIN || "http://localhost:5173,http://127.0.0.1:5173,http://127.0.0.1:5174")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean),
+);
 
 function sendJson(res, status, body, origin) {
   const payload = JSON.stringify(body);
@@ -14,7 +19,7 @@ function sendJson(res, status, body, origin) {
     "Access-Control-Allow-Methods": "POST, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
   };
-  if (origin === ALLOWED_ORIGIN) headers["Access-Control-Allow-Origin"] = origin;
+  if (origin && ALLOWED_ORIGINS.has(origin)) headers["Access-Control-Allow-Origin"] = origin;
   res.writeHead(status, headers);
   res.end(payload);
 }
@@ -32,7 +37,7 @@ async function readJson(req) {
 
 const server = http.createServer(async (req, res) => {
   const origin = req.headers.origin;
-  if (origin && origin !== ALLOWED_ORIGIN) {
+  if (origin && !ALLOWED_ORIGINS.has(origin)) {
     sendJson(res, 403, { ok: false, error: "Origin not allowed" }, origin);
     return;
   }

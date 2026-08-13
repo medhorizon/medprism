@@ -11,6 +11,8 @@ node_modules
 dist
 dist-ssr
 release
+release-v2
+release-v2-final
 *.local
 
 # Optional local Tectonic engines (do not commit upstream binaries)

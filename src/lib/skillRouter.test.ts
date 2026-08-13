@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import {
-  applyRuntimeScaffoldGuard,
   detectSkillIntent,
   extractResearchQuery,
   routeWorkflow,
@@ -24,35 +23,35 @@ describe("workflow router", () => {
     expect(route.plan.applyToLatex).toBe(false);
   });
 
-  it("builds writing plan targets only after an explicit kind is chosen", () => {
-    for (const [text, target] of [
-      ["帮我就以下关键词取标题：HCC，NMF，scRNA", "title"],
-      ["想一个英文标题", "title"],
-      ["propose a title for this paper", "title"],
-      ["把摘要换成更短的版本", "abstract"],
-      ["更新 Methods 部分", "methods"],
-      ["改成 Discussion 里的表述", "discussion"],
-    ] as const) {
+  it("leaves named writing destinations to the model PatchProposal", () => {
+    for (const text of [
+      "帮我就以下关键词取标题：HCC，NMF，scRNA",
+      "把摘要换成更短的版本",
+      "更新 Methods 部分",
+      "基于标题写一个引言",
+      "基于引言修改标题",
+      "Write a Limitations section",
+    ]) {
       const route = routeWorkflow({ text, explicitWorkflow: "writing" });
       expect(route.kind).toBe("writing");
-      expect(route.plan.target?.kind).toBe(target);
+      expect(route.plan.target).toBeUndefined();
       expect(route.plan.steps).toContain("latex-apply");
       expect(route.needsLlmClassification).toBeFalsy();
     }
   });
 
-  it("models research as an independent stage before writing when kind is writing", () => {
-    for (const [text, target] of [
-      ["帮我调研 HCC 并写一个摘要", "abstract"],
-      ["调研 HCC 后撰写 Methods", "methods"],
-      ["调研 HCC 并写 Discussion", "discussion"],
-      ["调研该项目并完善 Funding", "funding"],
-    ] as const) {
+  it("models research as an independent stage before writing without preselecting a target", () => {
+    for (const text of [
+      "帮我调研 HCC 并写一个摘要",
+      "调研 HCC 后撰写 Methods",
+      "调研 HCC 并写 Discussion",
+      "调研该项目并完善 Funding",
+    ]) {
       const route = routeWorkflow({ text, explicitWorkflow: "writing" });
       expect(route.kind).toBe("writing");
       expect(route.plan.steps).toEqual(["research", "writing", "latex-apply"]);
       expect(route.plan.research?.purpose).toBe("writing");
-      expect(route.plan.target?.kind).toBe(target);
+      expect(route.plan.target).toBeUndefined();
       expect(route.plan.applyToLatex).toBe(true);
     }
   });
@@ -62,7 +61,7 @@ describe("workflow router", () => {
     expect(route.kind).toBe("polish");
     expect(route.plan.steps).toEqual(["research", "polish", "latex-apply"]);
     expect(route.plan.research?.purpose).toBe("polish");
-    expect(route.plan.target).toMatchObject({ kind: "selection" });
+    expect(route.plan.target).toBeUndefined();
   });
 
   it("supports research plus polish on a named LaTeX section", () => {
@@ -72,7 +71,7 @@ describe("workflow router", () => {
     });
     expect(route.kind).toBe("polish");
     expect(route.plan.steps).toEqual(["research", "polish", "latex-apply"]);
-    expect(route.plan.target).toMatchObject({ kind: "discussion" });
+    expect(route.plan.target).toBeUndefined();
   });
 
   it("supports research plus citation without turning research into a writer", () => {
@@ -118,7 +117,7 @@ describe("workflow router", () => {
       explicitWorkflow: "citation",
     });
     expect(route.kind).toBe("citation");
-    expect(route.plan.target).toMatchObject({ kind: "discussion" });
+    expect(route.plan.target).toBeUndefined();
     expect(route.plan.steps).toEqual(["research", "citation", "latex-apply"]);
   });
 
@@ -146,36 +145,6 @@ describe("workflow router", () => {
     expect(route.kind).toBe("writing");
     expect(route.plan.target).toBeUndefined();
     expect(route.plan.applyToLatex).toBe(true);
-  });
-
-  it("runtime scaffold guard overrides a misclassified advice route", () => {
-    const text = "我想发discover oncology，请检查结构上还有那些并补充，内容留空";
-    expect(routeWorkflow({ text }).needsLlmClassification).toBe(true);
-    const classifiedAsAdvice = routeWorkflow({
-      text,
-      explicitWorkflow: "advice",
-    });
-    expect(classifiedAsAdvice.kind).toBe("advice");
-    const guarded = applyRuntimeScaffoldGuard({
-      route: classifiedAsAdvice,
-      userText: text,
-      locked: false,
-    });
-    expect(guarded.overridden).toBe(true);
-    expect(guarded.fromKind).toBe("advice");
-    expect(guarded.route.kind).toBe("writing");
-    expect(guarded.route.plan.applyToLatex).toBe(true);
-  });
-
-  it("runtime scaffold guard does not override locked UI/command routes", () => {
-    const text = "内容留空，补充 Funding";
-    const locked = applyRuntimeScaffoldGuard({
-      route: routeWorkflow({ text, explicitWorkflow: "advice" }),
-      userText: text,
-      locked: true,
-    });
-    expect(locked.overridden).toBe(false);
-    expect(locked.route.kind).toBe("advice");
   });
 
   it("does not treat a checklist mention of 参考文献 as citation", () => {
@@ -246,30 +215,24 @@ describe("workflow router", () => {
     ).toBe("review");
   });
 
-  it("marks a plain section-writing request as a LaTeX target without research", () => {
+  it("does not infer a target for a plain section-writing request", () => {
     const route = routeWorkflow({
       text: "根据当前项目写一个 Discussion",
       explicitWorkflow: "writing",
     });
     expect(route.kind).toBe("writing");
     expect(route.plan.steps).toEqual(["writing", "latex-apply"]);
-    expect(route.plan.target).toMatchObject({ kind: "discussion" });
+    expect(route.plan.target).toBeUndefined();
     expect(route.plan.research).toBeUndefined();
   });
 
-  it("supports a custom named section in Chinese or English", () => {
+  it("does not infer custom named sections before the model proposal", () => {
     expect(
       routeWorkflow({ text: "写一个 Limitations 章节", explicitWorkflow: "writing" }).plan.target,
-    ).toMatchObject({
-      kind: "section",
-      sectionTitle: "Limitations",
-    });
+    ).toBeUndefined();
     expect(
       routeWorkflow({ text: "Write a Limitations section", explicitWorkflow: "writing" }).plan
         .target,
-    ).toMatchObject({
-      kind: "section",
-      sectionTitle: "Limitations",
-    });
+    ).toBeUndefined();
   });
 });

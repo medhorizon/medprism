@@ -25,7 +25,7 @@ Return one JSON object:
 }
 ```
 
-`patchProposal` is optional when no safe edit can be located. Omit the field entirely in that case; do not return `patchProposal: null` or `operations: []`. When the runtime has already located a named target (title, abstract, Methods, …), return `textDraft` instead of inventing file paths.
+`patchProposal` is optional when no safe edit can be located. Omit the field entirely in that case; do not return `patchProposal: null` or `operations: []`. Determine the requested destination from the user request and supplied project context. Distinguish source context from the edit destination (for example, "write an introduction based on the title" edits the introduction, not the title).
 
 For new structural blocks / blank modules, return **only** `insert_before` operations (never `add`, `create`, `append`, `update`, or `bib_add`):
 

@@ -7,6 +7,7 @@ import type {
   ResearchSpec,
 } from "../research/types";
 import type { ToolContext, ToolResult } from "../../tools/types";
+import type { ContextPackage } from "../context/snapshot";
 
 export type WorkflowKind =
   | "research"
@@ -159,6 +160,7 @@ export type WorkflowExecutionInput = {
   config: LlmConfig;
   history: ChatRequestMessage[];
   ctx: ToolContext;
+  contextPackage: ContextPackage;
   services: WorkflowServices;
   /** Optional UI callback for incremental model tokens. */
   onDelta?: (delta: string) => void;

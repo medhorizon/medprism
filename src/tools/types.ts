@@ -1,4 +1,4 @@
-import type { TextSelection } from "../lib/context/snapshot";
+import type { ConversationContext, TextSelection } from "../lib/context/snapshot";
 
 export type AssistantMode = "assistant" | "review";
 
@@ -7,6 +7,7 @@ export type ToolContext = {
   files: Record<string, string>;
   mainFile?: string;
   activeFile?: string;
+  cursor?: number;
   selection?: TextSelection;
   /** Optional UI copy; runtime recomputes this from files + selection. */
   selectedText?: string;
@@ -14,6 +15,8 @@ export type ToolContext = {
   lastCompileLog?: string;
   /** Optional durable project notes (journal prefs, terminology, decisions). */
   memoryNotes?: string;
+  /** Runtime-derived recent confirmations; never treated as instructions. */
+  conversationContext?: ConversationContext;
 };
 
 export type ToolResult =

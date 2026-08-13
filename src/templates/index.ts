@@ -30,7 +30,7 @@ export function filesToFileList(files: Record<string, string>, order?: string[])
       ? ("bib" as const)
       : lower.endsWith(".cls") || lower.endsWith(".sty") || lower.endsWith(".bst")
         ? ("cls" as const)
-        : lower.endsWith(".pdf") || lower.endsWith(".png") || lower.endsWith(".jpg")
+        : lower.endsWith(".pdf") || lower.endsWith(".png") || lower.endsWith(".jpg") || lower.endsWith(".jpeg")
           ? ("asset" as const)
           : ("tex" as const);
     return {

@@ -13,6 +13,60 @@ export type HydratePatchResult =
   | { ok: true; patchSet: PatchSet }
   | { ok: false; error: PatchValidationError };
 
+function dirname(path: string): string {
+  const index = path.lastIndexOf("/");
+  return index < 0 ? "" : path.slice(0, index + 1);
+}
+
+function imageReferences(text: string): string[] {
+  return [...text.matchAll(/\\includegraphics(?:\s*\[[^\]]*\])?\s*\{([^}]+)\}/gi)]
+    .map((match) => match[1]!.trim())
+    .filter(Boolean);
+}
+
+function graphicPaths(source: string): string[] {
+  return [...source.matchAll(/\\graphicspath\s*\{((?:\s*\{[^}]+\}\s*)+)\}/gi)]
+    .flatMap((match) => [...match[1]!.matchAll(/\{([^}]+)\}/g)].map((entry) => entry[1]!.trim()))
+    .filter(Boolean);
+}
+
+function imageCandidates(sourcePath: string, reference: string, source: string): string[] {
+  const raw = reference.replace(/\\/g, "/");
+  const based = `${dirname(sourcePath)}${raw}`;
+  const candidates = [
+    raw,
+    based,
+    ...graphicPaths(source).flatMap((directory) => [
+      `${directory.replace(/\\/g, "/")}${raw}`,
+      `${dirname(sourcePath)}${directory.replace(/\\/g, "/")}${raw}`,
+    ]),
+  ];
+  if (!/\.[A-Za-z0-9]+$/.test(raw)) {
+    const bases = [...candidates];
+    for (const extension of [".pdf", ".png", ".jpg", ".jpeg", ".eps", ".svg"]) {
+      candidates.push(...bases.map((candidate) => `${candidate}${extension}`));
+    }
+  }
+  return [...new Set(candidates)].flatMap((candidate) => {
+    try {
+      return [assertSafeProjectRelativePath(candidate)];
+    } catch {
+      return [];
+    }
+  });
+}
+
+function missingImageReference(
+  snapshot: ContextSnapshot,
+  path: string,
+  text: string,
+): string | undefined {
+  return imageReferences(text).find((reference) =>
+    !imageCandidates(path, reference, snapshot.files[path] ?? "")
+      .some((candidate) => candidate in snapshot.files),
+  );
+}
+
 export async function hydratePatchProposal(
   proposal: ModelPatchProposal,
   snapshot: ContextSnapshot,
@@ -54,6 +108,20 @@ export async function hydratePatchProposal(
       };
     }
     const baseSha256 = await sha256Hex(content);
+
+    const insertedText = proposed.op === "replace_text" ? proposed.newText : proposed.text;
+    const missingImage = missingImageReference(snapshot, path, insertedText);
+    if (missingImage) {
+      return {
+        ok: false,
+        error: {
+          code: "RESOURCE_NOT_FOUND",
+          message: `Referenced image does not exist in the project: ${missingImage}`,
+          operationIndex: index,
+          path,
+        },
+      };
+    }
 
     if (proposed.op === "replace_text") {
       if (options.strictSelection && snapshot.selection) {
@@ -132,7 +200,9 @@ export async function hydratePatchProposal(
       summary: proposal.summary,
       operations,
       verify: {
-        compile: options.forceCompileVerification ?? false,
+        compile: options.forceCompileVerification ?? operations.some((operation) =>
+          /\.(?:tex|bib)$/i.test(operation.path),
+        ),
       },
     },
   };

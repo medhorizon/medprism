@@ -1,0 +1,23 @@
+{
+  "schemaVersion": "2",
+  "enabled": true,
+  "activationMode": "replace",
+  "runtimeSkillsEnabled": true,
+  "skills": [
+    "scientific-writing",
+    "academic-paper",
+    "nature-writing",
+    "nature-polishing",
+    "latex-paper-en",
+    "nature-citation",
+    "academic-paper-reviewer",
+    "fix-compile-errors"
+  ],
+  "activationRequires": [
+    "contract lint",
+    "prompt composition tests",
+    "workflow parser fixtures",
+    "end-to-end validated PatchSet tests",
+    "explicit registry switch"
+  ]
+}

@@ -29,6 +29,9 @@ const CAPABILITY_INSTRUCTIONS = {
 
 export type PromptCapability = keyof typeof CAPABILITY_INSTRUCTIONS;
 
+/** Replacement skills are loaded one at a time by the active workflow. */
+export const RUNTIME_SKILLS_ENABLED = true;
+
 export function buildWorkflowSystemPrompt(args: {
   workflow: WorkflowKind;
   skillId: string;
@@ -40,13 +43,18 @@ export function buildWorkflowSystemPrompt(args: {
   const capabilityBlocks = [...new Set(args.capabilities ?? [])].map(
     (capability) => CAPABILITY_INSTRUCTIONS[capability].trim(),
   );
+  const skillBlocks = RUNTIME_SKILLS_ENABLED
+    ? [
+        `# Selected skill: ${args.skillId}`,
+        args.skill.trim(),
+        "# Precedence",
+        "The base policy and active workflow instruction override conflicting examples in the selected skill.",
+      ]
+    : [];
   return [
     basePolicy.trim(),
     (args.instruction ?? WORKFLOW_INSTRUCTIONS[args.workflow]).trim(),
     ...capabilityBlocks,
-    `# Selected skill: ${args.skillId}`,
-    args.skill.trim(),
-    "# Precedence",
-    "The base policy and active workflow instruction override conflicting examples in the selected skill.",
+    ...skillBlocks,
   ].join("\n\n");
 }

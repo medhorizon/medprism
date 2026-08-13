@@ -1,29 +1,23 @@
-import academicPaperSkill from "../../../skills/academic-paper/SKILL.md?raw";
-import latexPaperEnSkill from "../../../skills/latex-paper-en/SKILL.md?raw";
-import naturePolishingSkill from "../../../skills/nature-polishing/SKILL.md?raw";
-import natureWritingSkill from "../../../skills/nature-writing/SKILL.md?raw";
-import scientificWritingSkill from "../../../skills/scientific-writing/SKILL.md?raw";
+import academicPaperSkill from "../../../skills/staged/academic-paper/SKILL.md?raw";
+import latexPaperEnSkill from "../../../skills/staged/latex-paper-en/SKILL.md?raw";
+import naturePolishingSkill from "../../../skills/staged/nature-polishing/SKILL.md?raw";
+import natureWritingSkill from "../../../skills/staged/nature-writing/SKILL.md?raw";
+import scientificWritingSkill from "../../../skills/staged/scientific-writing/SKILL.md?raw";
 import {
-  buildContextSnapshot,
   formatWorkspaceContext,
   type ContextSnapshot,
 } from "../context/snapshot";
 import { taggedPromptData } from "../promptData";
 import { compactPaperHits, validateResearchUse } from "../research/service";
 import { parseModelWorkflowEnvelope } from "../replyParse";
-import { buildScaffoldFromUserText } from "../latex/scaffold";
-import {
-  buildSectionFillFromUserText,
-  isProvidedSectionFillRequest,
-} from "../latex/sectionFill";
 import {
   detectWritingDomain,
   isNatureWritingRequest,
-  isStructuralScaffoldRequest,
 } from "../skillRouter";
-import { finalizeModelPatchProposal, finalizePatchSet } from "./latexApply";
+import { finalizeModelPatchProposal } from "./latexApply";
 import { buildWorkflowSystemPrompt } from "./prompt";
 import { runTargetedTextWorkflow } from "./textWriting";
+import { validateProtectedTextReplacement } from "./textSafety";
 import {
   emptyAgentResult,
   type WorkflowExecutionInput,
@@ -74,113 +68,9 @@ export const runWritingWorkflow: WorkflowHandler = async (input) => {
     return invalidModelResult(kind, `Writing handler cannot execute ${kind}`);
   }
 
-  let snapshot: ContextSnapshot;
-  try {
-    snapshot = await buildContextSnapshot(input.ctx);
-  } catch (error) {
-    return invalidModelResult(
-      kind,
-      error instanceof Error ? error.message : String(error),
-    );
-  }
+  const snapshot: ContextSnapshot = input.contextPackage;
   const skill = selectedWritingSkill(input);
   const target = input.request.plan?.target;
-
-  // Runtime-owned blank module shells — modules parsed from the user checklist / targetKinds.
-  // Bind on intent, not only workflow kind, so a misclassified polish/latex still scaffolds.
-  if (isStructuralScaffoldRequest(input.request.userText)) {
-    const scaffold = await buildScaffoldFromUserText(snapshot, input.request.userText);
-    if (!scaffold.ok) {
-      return {
-        agent: emptyAgentResult(kind, "Structural scaffold", [scaffold.message]),
-        content: scaffold.message,
-        toolNotes: [`workflow:${kind}:scaffold:none`, `skill:${skill.id}`],
-      };
-    }
-    const finalized = await finalizePatchSet(snapshot, scaffold.patchSet);
-    if (!finalized.ok) {
-      return invalidModelResult(kind, finalized.error.message);
-    }
-    const skippedNote =
-      scaffold.skipped.length > 0
-        ? `已跳过已存在或不适用项：${scaffold.skipped.join("、")}。`
-        : "";
-    return {
-      agent: {
-        schemaVersion: "1",
-        workflow: kind,
-        summary: scaffold.patchSet.summary,
-        warnings: scaffold.skipped.length ? [skippedNote] : [],
-        patch: finalized.patchSet,
-      },
-      content: [
-        `已由运行时按${
-          scaffold.parseSource === "checklist"
-            ? "清单"
-            : scaffold.parseSource === "mentions"
-              ? "请求中的模块名"
-              : scaffold.parseSource === "default"
-                ? "默认投稿声明列表"
-                : "指定模块"
-        }写入 ${scaffold.added.length} 个空模块骨架（${scaffold.added.join("、")}）。`,
-        "内容为占位，请查看 Diff 后选择 Keep。",
-        skippedNote,
-      ]
-        .filter(Boolean)
-        .join(" "),
-      toolNotes: [
-        `workflow:${kind}:scaffold:${scaffold.added.length}`,
-        `scaffold:source:${scaffold.parseSource}`,
-        `skill:${skill.id}`,
-      ],
-    };
-  }
-
-  // User pasted ≥2 labeled section bodies — apply via runtime targets, never model oldText.
-  if (
-    (kind === "writing" || kind === "polish" || kind === "latex") &&
-    isProvidedSectionFillRequest(input.request.userText)
-  ) {
-    const fill = await buildSectionFillFromUserText(
-      snapshot,
-      input.request.userText,
-    );
-    if (!fill.ok) {
-      return {
-        agent: emptyAgentResult(kind, "Provided section fill", [fill.message]),
-        content: fill.message,
-        toolNotes: [`workflow:${kind}:section-fill:none`, `skill:${skill.id}`],
-      };
-    }
-    const finalized = await finalizePatchSet(snapshot, fill.patchSet);
-    if (!finalized.ok) {
-      return invalidModelResult(kind, finalized.error.message);
-    }
-    const skippedNote =
-      fill.skipped.length > 0
-        ? `已跳过：${fill.skipped.join("、")}。`
-        : "";
-    return {
-      agent: {
-        schemaVersion: "1",
-        workflow: kind,
-        summary: fill.patchSet.summary,
-        warnings: fill.skipped.length ? [skippedNote] : [],
-        patch: finalized.patchSet,
-      },
-      content: [
-        `已由运行时按你提供的正文写入 ${fill.applied.length} 个模块（${fill.applied.join("、")}）。`,
-        "请查看 Diff 后选择 Keep。",
-        skippedNote,
-      ]
-        .filter(Boolean)
-        .join(" "),
-      toolNotes: [
-        `workflow:${kind}:section-fill:${fill.applied.length}`,
-        `skill:${skill.id}`,
-      ],
-    };
-  }
 
   // All runtime-locatable prose targets use the same trusted LaTeX adapter.
   if ((kind === "writing" || kind === "polish") && target) {
@@ -272,15 +162,29 @@ export const runWritingWorkflow: WorkflowHandler = async (input) => {
     };
   }
 
-  const allowedPaths = kind === "latex" && snapshot.mainFile && !snapshot.selection
-    ? [...new Set([snapshot.activeFile, snapshot.mainFile])]
-    : [snapshot.activeFile];
+  if (kind === "polish" && snapshot.selection && snapshot.selectedText !== undefined) {
+    const replacement = proposal.operations.length === 1 && proposal.operations[0]?.op === "replace_text"
+      ? proposal.operations[0].newText
+      : undefined;
+    if (replacement === undefined) {
+      return invalidModelResult(kind, "A selection-scoped polish must return one replace_text operation");
+    }
+    const protectedResult = validateProtectedTextReplacement(snapshot.selectedText, replacement);
+    if (!protectedResult.ok) return invalidModelResult(kind, protectedResult.message);
+  }
+
+  const allowedPaths = snapshot.selection
+    ? [snapshot.activeFile]
+    : [...new Set([
+        snapshot.activeFile,
+        ...(snapshot.mainFile ? [snapshot.mainFile] : []),
+      ])];
   const finalized = await finalizeModelPatchProposal({
     snapshot,
     proposal,
     strictSelection: Boolean(snapshot.selection),
     allowedPaths,
-    forceCompileVerification: kind === "latex",
+    forceCompileVerification: true,
   });
   if (!finalized.ok) return invalidModelResult(kind, finalized.error.message);
 

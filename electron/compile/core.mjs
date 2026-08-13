@@ -67,7 +67,7 @@ export function validateCompileRequest(request) {
     if (typeof content !== "string") {
       throw new CompileServiceError("BINARY_UNSUPPORTED", `Non-text file is unsupported: ${rel}`);
     }
-    const bytes = Buffer.byteLength(content, "utf8");
+    const bytes = fileBufferForCompile(content).length;
     if (bytes > COMPILE_LIMITS.maxFileBytes) {
       throw new CompileServiceError("LIMIT_EXCEEDED", `File too large: ${rel}`);
     }
@@ -96,11 +96,15 @@ export function validateCompileRequest(request) {
       (typeof request.projectRevision !== "string" || !/^[a-f0-9]{64}$/i.test(request.projectRevision))) {
     throw new CompileServiceError("INVALID_REQUEST", "projectRevision must be SHA-256");
   }
+  if (request.synctex !== undefined && typeof request.synctex !== "boolean") {
+    throw new CompileServiceError("INVALID_REQUEST", "synctex must be boolean");
+  }
   return {
     files: normalizedFiles,
     mainFile,
     jobId: request.jobId || randomUUID(),
     projectRevision: request.projectRevision,
+    synctex: request.synctex === true,
   };
 }
 
@@ -115,7 +119,7 @@ function fileBufferForCompile(content) {
 
 async function writeTextProject(root, files) {
   const rootResolved = path.resolve(root);
-  for (const [rel, content] of Object.entries(files)) {
+  for (const [rel, content] of Object.entries(filesWithRootBibliographyStyles(files))) {
     const safe = assertSafeProjectRelativePath(rel);
     const full = path.resolve(rootResolved, ...safe.split("/"));
     if (full !== rootResolved && !full.startsWith(`${rootResolved}${path.sep}`)) {
@@ -124,6 +128,22 @@ async function writeTextProject(root, files) {
     await fs.mkdir(path.dirname(full), { recursive: true });
     await fs.writeFile(full, fileBufferForCompile(content));
   }
+}
+
+export function filesWithRootBibliographyStyles(files) {
+  const result = { ...files };
+  const nestedByName = new Map();
+  for (const [filePath, content] of Object.entries(files)) {
+    if (!filePath.includes("/") || !filePath.toLowerCase().endsWith(".bst")) continue;
+    const name = path.posix.basename(filePath);
+    const candidates = nestedByName.get(name) ?? [];
+    candidates.push(content);
+    nestedByName.set(name, candidates);
+  }
+  for (const [name, candidates] of nestedByName) {
+    if (!(name in result) && candidates.length === 1) result[name] = candidates[0];
+  }
+  return result;
 }
 
 function appendLog(state, chunk) {
@@ -144,9 +164,23 @@ function appendLog(state, chunk) {
   }
 }
 
-function runProcess({ cwd, mainFile, signal, executable, spawnImpl, timeoutMs }) {
+export function bibliographyFailure(log) {
+  if (/errors were issued by (?:BibTeX|Biber), but were ignored/i.test(log)) return true;
+  const finalPassStart = Math.max(
+    log.lastIndexOf("note: Rerunning TeX"),
+    log.lastIndexOf("note: Running TeX"),
+  );
+  const finalPass = finalPassStart >= 0 ? log.slice(finalPassStart) : log;
+  return /Package natbib Warning: There were undefined citations\./i.test(finalPass);
+}
+
+function runProcess({ cwd, mainFile, synctex, signal, executable, spawnImpl, timeoutMs }) {
   return new Promise((resolve) => {
-    const args = ["-X", "compile", "--untrusted", "--outfmt", "pdf", mainFile];
+    const args = [
+      "-X", "compile", "--untrusted", "--print", "--reruns", "2", "--outfmt", "pdf",
+      ...(synctex ? ["--synctex"] : []),
+      mainFile,
+    ];
     const child = spawnImpl(executable, args, {
       cwd,
       env: limitedEnvironment(),
@@ -233,6 +267,22 @@ async function readCompiledPdf(root, mainFile) {
   return null;
 }
 
+async function readCompiledSyncTex(root, mainFile) {
+  const relativeSyncTex = mainFile.replace(/\.tex$/i, ".synctex.gz");
+  const candidates = [
+    path.resolve(root, ...relativeSyncTex.split("/")),
+    path.resolve(root, path.basename(relativeSyncTex)),
+  ];
+  for (const candidate of candidates) {
+    try {
+      return await fs.readFile(candidate);
+    } catch {
+      // Try next Tectonic output location.
+    }
+  }
+  return null;
+}
+
 export async function compileProject(
   rawRequest,
   {
@@ -269,6 +319,7 @@ export async function compileProject(
     const processResult = await runProcess({
       cwd: root,
       mainFile: request.mainFile,
+      synctex: request.synctex,
       signal,
       executable,
       spawnImpl,
@@ -304,6 +355,16 @@ export async function compileProject(
         projectRevision: request.projectRevision,
       };
     }
+    if (bibliographyFailure(processResult.log)) {
+      return {
+        ok: false,
+        jobId,
+        code: "UNRESOLVED_REFERENCES",
+        log: processResult.log,
+        error: "Bibliography processing failed; one or more citations are unresolved",
+        projectRevision: request.projectRevision,
+      };
+    }
     const pdf = await readCompiledPdf(root, request.mainFile);
     if (!pdf) {
       return {
@@ -315,12 +376,26 @@ export async function compileProject(
         projectRevision: request.projectRevision,
       };
     }
+    const synctex = request.synctex
+      ? await readCompiledSyncTex(root, request.mainFile)
+      : null;
+    if (request.synctex && !synctex) {
+      return {
+        ok: false,
+        jobId,
+        code: "SYNCTEX_MISSING",
+        log: processResult.log,
+        error: "Tectonic exited successfully but no SyncTeX data was found",
+        projectRevision: request.projectRevision,
+      };
+    }
     return {
       ok: true,
       jobId,
       code: "OK",
       log: processResult.log,
       pdfBase64: pdf.toString("base64"),
+      ...(synctex ? { synctexBase64: synctex.toString("base64") } : {}),
       projectRevision: request.projectRevision,
     };
   } catch (error) {

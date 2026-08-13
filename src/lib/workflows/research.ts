@@ -1,4 +1,4 @@
-import scientificWritingSkill from "../../../skills/scientific-writing/SKILL.md?raw";
+import scientificWritingSkill from "../../../skills/staged/scientific-writing/SKILL.md?raw";
 import { taggedPromptData } from "../promptData";
 import {
   compactPaperHits,

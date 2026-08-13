@@ -8,6 +8,7 @@ type SessionState = {
   messages: ChatMessage[];
   sending: boolean;
   runId: number;
+  controller?: AbortController;
 };
 
 type Listener = () => void;
@@ -97,14 +98,33 @@ export function setSessionChat(
 
 export function clearSessionChat(projectId: string): void {
   if (!projectId.trim()) return;
+  sessions.get(projectId)?.controller?.abort();
   sessions.delete(projectId);
   emit();
+}
+
+export function stopProjectAssistant(projectId: string, stoppedContent: string): boolean {
+  if (!projectId.trim()) return false;
+  const session = ensure(projectId);
+  if (!session.sending) return false;
+  session.runId += 1;
+  session.controller?.abort();
+  session.controller = undefined;
+  session.sending = false;
+  session.messages = session.messages.map((message) =>
+    message.pending ? { ...message, content: stoppedContent, pending: undefined } : message,
+  );
+  persistDurableChat(projectId, session.messages);
+  emit();
+  return true;
 }
 
 /** App is closing: stop runs and persist what we can (pending → interrupted via saveProjectChat). */
 export function shutdownProjectChats(interruptedContent: string): void {
   for (const [projectId, session] of sessions) {
     session.runId += 1;
+    session.controller?.abort();
+    session.controller = undefined;
     session.sending = false;
     saveProjectChat(projectId, session.messages, localStorage, interruptedContent);
   }
@@ -145,6 +165,8 @@ export async function startProjectAssistant(
   };
   const thinkingId = crypto.randomUUID();
   const runId = ++session.runId;
+  const controller = new AbortController();
+  session.controller = controller;
   session.messages = [
     ...session.messages,
     userMessage,
@@ -169,6 +191,7 @@ export async function startProjectAssistant(
       history: request.history,
       workflow: request.workflow,
       ctx: request.ctx,
+      signal: controller.signal,
       onDelta: (delta) => {
         if (!stillThisRun()) return;
         streamed += delta;
@@ -242,6 +265,7 @@ export async function startProjectAssistant(
   } finally {
     const current = ensure(projectId);
     if (current.runId === runId) {
+      current.controller = undefined;
       current.sending = false;
       emit();
     }

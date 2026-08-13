@@ -1,4 +1,5 @@
 import { assertSafeProjectRelativePath } from "../projectPath";
+import { lineContextSnippet } from "../diffPreview";
 import { sha256Hex } from "./hash";
 import { projectRevision } from "./revision";
 import type {
@@ -8,7 +9,6 @@ import type {
   PatchPreview,
   PatchSet,
   PatchValidationError,
-  SourceRange,
   StructuredBibEntry,
 } from "./schema";
 
@@ -54,14 +54,6 @@ function occurrenceIndexes(haystack: string, needle: string): number[] {
     from = index + 1;
   }
   return indexes;
-}
-
-function snippet(content: string, range: SourceRange, context = 100): string {
-  const start = Math.max(0, range.start - context);
-  const end = Math.min(content.length, range.end + context);
-  const prefix = start > 0 ? "…" : "";
-  const suffix = end < content.length ? "…" : "";
-  return `${prefix}${content.slice(start, end)}${suffix}`;
 }
 
 function stripTexComments(value: string): string {
@@ -285,8 +277,8 @@ function applyTextOperation(
       preview: {
         path: operation.path,
         op: operation.op,
-        before: snippet(content, beforeRange),
-        after: snippet(next, afterRange),
+        before: lineContextSnippet(content, beforeRange),
+        after: lineContextSnippet(next, afterRange),
         beforeRange,
         afterRange,
       },
@@ -320,11 +312,11 @@ function applyTextOperation(
     preview: {
       path: operation.path,
       op: operation.op,
-      before: snippet(content, {
+      before: lineContextSnippet(content, {
         start: Math.max(0, anchorStart),
         end: anchorStart + operation.anchor.length,
       }),
-      after: snippet(next, afterRange),
+      after: lineContextSnippet(next, afterRange),
       beforeRange,
       afterRange,
     },
@@ -395,8 +387,8 @@ export async function simulatePatchSet(
       changes.push({
         path,
         op: operation.op,
-        before: snippet(before, { start: Math.max(0, before.length - 100), end: before.length }),
-        after: snippet(merged.content, afterRange),
+        before: lineContextSnippet(before, beforeRange),
+        after: lineContextSnippet(merged.content, afterRange),
         beforeRange,
         afterRange,
       });

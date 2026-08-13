@@ -9,6 +9,7 @@ type FileTreeProps = {
   accountLabel: string;
   onAccountClick: () => void;
   onApiSettings: () => void;
+  onAddImage: () => void;
 };
 
 export function FileTree({
@@ -18,6 +19,7 @@ export function FileTree({
   accountLabel,
   onAccountClick,
   onApiSettings,
+  onAddImage,
 }: FileTreeProps) {
   const { t } = useI18n();
 
@@ -25,6 +27,22 @@ export function FileTree({
     <aside className="panel panel-files">
       <div className="panel-head">
         <span>{t("files.title")}</span>
+        <button
+          className="icon-btn"
+          type="button"
+          title={t("files.addImage")}
+          aria-label={t("files.addImage")}
+          onClick={onAddImage}
+        >
+          <svg width="14" height="14" viewBox="0 0 16 16" fill="none" aria-hidden>
+            <path
+              d="M8 3v10M3 8h10"
+              stroke="currentColor"
+              strokeWidth="1.5"
+              strokeLinecap="round"
+            />
+          </svg>
+        </button>
       </div>
       <div className="file-list">
         {files.map((file) => (
@@ -40,7 +58,7 @@ export function FileTree({
                 : file.kind === "cls"
                   ? "cls"
                   : file.kind === "asset"
-                    ? "pdf"
+                    ? file.name.split(".").pop()?.toLowerCase() || "asset"
                     : "tex"}
             </span>
             <span className="file-name">{file.name}</span>

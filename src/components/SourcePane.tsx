@@ -1,13 +1,15 @@
-import type { ChangeEvent, SyntheticEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type SyntheticEvent } from "react";
 import { useI18n } from "../i18n/context";
 import type { TextSelection } from "../lib/context/snapshot";
-import { isBinaryFileContent } from "../lib/projectBinary";
+import { decodeBinaryFile, isBinaryFileContent } from "../lib/projectBinary";
 
 type SourcePaneProps = {
   fileName: string;
   value: string;
   onChange: (value: string) => void;
   onSelectionChange?: (selection?: TextSelection) => void;
+  onCursorChange?: (cursor: number) => void;
+  revealSelection?: TextSelection;
   onFixWithAi: () => void;
 };
 
@@ -16,22 +18,56 @@ export function SourcePane({
   value,
   onChange,
   onSelectionChange,
+  onCursorChange,
+  revealSelection,
   onFixWithAi,
 }: SourcePaneProps) {
   const { t } = useI18n();
-  const binary = isBinaryFileContent(value) || fileName.toLowerCase().endsWith(".pdf");
+  const extension = fileName.split(".").pop()?.toLowerCase() ?? "";
+  const imageFile = ["png", "jpg", "jpeg"].includes(extension);
+  const binary = imageFile || isBinaryFileContent(value) || extension === "pdf";
+  const [imageUrl, setImageUrl] = useState<string | null>(null);
+  const editorRef = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor || !revealSelection) return;
+    editor.focus();
+    editor.setSelectionRange(revealSelection.start, revealSelection.end);
+    const line = value.slice(0, revealSelection.start).split("\n").length;
+    const lineHeight = Number.parseFloat(getComputedStyle(editor).lineHeight) || 20;
+    editor.scrollTop = Math.max(0, (line - 3) * lineHeight);
+  }, [fileName, revealSelection, value]);
+
+  useEffect(() => {
+    if (!imageFile) {
+      setImageUrl(null);
+      return;
+    }
+    const bytes = decodeBinaryFile(value);
+    if (!bytes) {
+      setImageUrl(null);
+      return;
+    }
+    const url = URL.createObjectURL(
+      new Blob([new Uint8Array(bytes)], { type: extension === "png" ? "image/png" : "image/jpeg" }),
+    );
+    setImageUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [extension, imageFile, value]);
 
   function reportSelection(event: SyntheticEvent<HTMLTextAreaElement>) {
     const target = event.currentTarget;
     const start = target.selectionStart;
     const end = target.selectionEnd;
+    onCursorChange?.(end);
     onSelectionChange?.(start === end ? undefined : { start, end });
   }
 
   function change(event: ChangeEvent<HTMLTextAreaElement>) {
     onChange(event.target.value);
-    // Typing changes offsets; never retain a range from the previous buffer.
     onSelectionChange?.();
+    onCursorChange?.(event.target.selectionStart);
   }
 
   return (
@@ -59,13 +95,20 @@ export function SourcePane({
       <div className="editor-wrap">
         <div className="editor-meta">
           <strong>{fileName}</strong>
-          {binary ? <span>· PDF</span> : <span>· UTF-8</span>}
+          {binary ? <span>· {imageFile ? extension.toUpperCase() : "PDF"}</span> : <span>· UTF-8</span>}
           {binary ? null : <span>· LaTeX</span>}
         </div>
         {binary ? (
-          <div className="editor editor-binary">{t("source.binaryPdf")}</div>
+          imageFile && imageUrl ? (
+            <div className="editor editor-binary editor-image">
+              <img src={imageUrl} alt={fileName} />
+            </div>
+          ) : (
+            <div className="editor editor-binary">{t("source.binaryPdf")}</div>
+          )
         ) : (
           <textarea
+            ref={editorRef}
             className="editor"
             spellCheck={false}
             value={value}

@@ -1,4 +1,4 @@
-import academicPaperReviewerSkill from "../../../skills/academic-paper-reviewer/SKILL.md?raw";
+import academicPaperReviewerSkill from "../../../skills/staged/academic-paper-reviewer/SKILL.md?raw";
 import { assertSafeProjectRelativePath } from "../projectPath";
 import { MAX_PROJECT_MEMORY_CHARS } from "../projectMemory";
 import { taggedPromptData } from "../promptData";

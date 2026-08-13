@@ -1,12 +1,26 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { LangSwitch } from "../components/LangSwitch";
 import { ProviderSettingsModal } from "../components/ProviderSettingsModal";
 import { useI18n } from "../i18n/context";
 import type { MessageKey } from "../i18n/types";
+import { importWordMarkdown } from "../lib/compileClient";
+import {
+  chatCompletions,
+  isUsableLlmConfig,
+  LlmClientError,
+} from "../lib/llmClient";
+import {
+  looksLikeMojibake,
+  parseGeneratedLatexProject,
+  prepareMarkdownForLlm,
+  wordMarkdownToLatexPrompt,
+} from "../lib/wordTemplate";
 import { loadAuth, signOut, type AuthState } from "../state/auth";
+import { resolveLlmConfig } from "../state/llm";
 import {
   createProjectFromBundledTemplate,
+  createProjectFromFiles,
   deleteProject,
   ensureDemoProject,
   getLastProjectStoreError,
@@ -60,6 +74,8 @@ export function ProjectsPage() {
   const [providerOpen, setProviderOpen] = useState(false);
   const [signOutOpen, setSignOutOpen] = useState(false);
   const [contextMenu, setContextMenu] = useState<{ project: Project; x: number; y: number } | null>(null);
+  const [wordBusy, setWordBusy] = useState(false);
+  const wordInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     const storageError = getLastProjectStoreError();
@@ -107,6 +123,118 @@ export function ProjectsPage() {
     setPickerOpen(false);
     setError(null);
     setBusy(false);
+  }
+
+  function llmErrorMessage(error: LlmClientError): string {
+    if (error.code === "not_configured") return t("assistant.needConfig");
+    if (error.code === "unauthorized") return t("assistant.errorUnauthorized");
+    if (error.code === "cors_or_network" || error.code === "network") {
+      if (/other side closed/i.test(error.message)) return t("assistant.errorUpstreamClosed");
+      return t("assistant.errorNetwork", { detail: error.message });
+    }
+    if (error.code === "bad_response") return t("assistant.errorBadResponse");
+    if (
+      /upstream_not_configured/i.test(error.message) ||
+      /"code"\s*:\s*"upstream_not_configured"/i.test(error.message)
+    ) {
+      return t("assistant.errorUpstream");
+    }
+    return t("assistant.errorHttp", { detail: error.message });
+  }
+
+  function openWordPicker() {
+    setError(null);
+    const config = resolveLlmConfig();
+    if (!isUsableLlmConfig(config)) {
+      setError(t("assistant.needConfig"));
+      setProviderOpen(true);
+      return;
+    }
+    wordInputRef.current?.click();
+  }
+
+  async function handleWordFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith(".docx")) {
+      setError(t("word.needDocx"));
+      return;
+    }
+    const config = resolveLlmConfig();
+    if (!isUsableLlmConfig(config)) {
+      setError(t("assistant.needConfig"));
+      setProviderOpen(true);
+      return;
+    }
+
+    setWordBusy(true);
+    setError(null);
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer());
+      let binary = "";
+      const chunk = 0x8000;
+      for (let offset = 0; offset < bytes.length; offset += chunk) {
+        binary += String.fromCharCode(...bytes.subarray(offset, offset + chunk));
+      }
+      const imported = await importWordMarkdown({ docxBase64: btoa(binary) });
+      if (!imported.ok) {
+        setError(
+          imported.code === "ENGINE_UNAVAILABLE" ? t("word.pandocMissing") : t("word.readFailed"),
+        );
+        return;
+      }
+      const markdown = imported.markdown ?? "";
+      if (!markdown.trim()) {
+        setError(t("word.emptyMarkdown"));
+        return;
+      }
+      if (looksLikeMojibake(markdown)) {
+        setError(t("word.garbledSource"));
+        return;
+      }
+      const sourceMarkdown = prepareMarkdownForLlm(markdown);
+      const prompt = wordMarkdownToLatexPrompt(sourceMarkdown);
+      const raw = await chatCompletions({
+        config,
+        messages: [
+          { role: "system", content: prompt.system },
+          { role: "user", content: prompt.user },
+        ],
+      });
+      const generated = parseGeneratedLatexProject(raw, { sourceMarkdown });
+      const fallbackTitle = file.name.replace(/\.docx$/i, "").trim();
+      const project = createProjectFromFiles({
+        title: generated.title?.trim() || fallbackTitle || t("templates.untitled"),
+        templateId: "word-import",
+        templateName: t("projects.fromWord"),
+        files: generated.files,
+        mainFile: generated.mainFile,
+      });
+      if (!project) {
+        setError(getLastProjectStoreError()?.message ?? t("word.createFailed"));
+        return;
+      }
+      if (!refresh()) return;
+      navigate(`/p/${project.id}`);
+    } catch (e) {
+      if (e instanceof LlmClientError) {
+        if (e.status === 413 || /413|too large/i.test(e.message)) {
+          setError(t("word.payloadTooLarge"));
+        } else {
+          setError(llmErrorMessage(e));
+          if (e.code === "not_configured") setProviderOpen(true);
+        }
+      } else {
+        setError(
+          t("word.invalidProject", {
+            detail: e instanceof Error ? e.message : t("word.createFailed"),
+          }),
+        );
+      }
+    } finally {
+      setWordBusy(false);
+    }
   }
 
   async function handleCreate() {
@@ -284,9 +412,26 @@ export function ProjectsPage() {
           </div>
         )}
 
-        <button className="btn btn-primary" type="button" onClick={openPicker}>
-          {t("projects.new")}
-        </button>
+        <div className="shell-home-actions">
+          <button className="btn btn-primary" type="button" onClick={openPicker} disabled={wordBusy}>
+            {t("projects.new")}
+          </button>
+          <button
+            className="btn btn-secondary"
+            type="button"
+            onClick={openWordPicker}
+            disabled={wordBusy}
+          >
+            {wordBusy ? t("word.converting") : t("projects.fromWord")}
+          </button>
+          <input
+            ref={wordInputRef}
+            type="file"
+            accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            hidden
+            onChange={(event) => void handleWordFile(event)}
+          />
+        </div>
       </div>
 
       <ProviderSettingsModal open={providerOpen} onClose={() => setProviderOpen(false)} />

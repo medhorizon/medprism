@@ -31,6 +31,29 @@ declare global {
         }>;
         cancel(jobId: string): Promise<{ ok: boolean; error?: string }>;
         isAvailable(): Promise<boolean>;
+        exportWord(request: {
+          jobId?: string;
+          files: Record<string, string>;
+          mainFile: string;
+        }): Promise<{
+          ok: boolean;
+          jobId?: string;
+          code?: string;
+          log?: string;
+          docxBase64?: string;
+          error?: string;
+        }>;
+        importWord(request: {
+          docxBase64: string;
+          jobId?: string;
+        }): Promise<{
+          ok: boolean;
+          jobId?: string;
+          code?: string;
+          log?: string;
+          markdown?: string;
+          error?: string;
+        }>;
       };
     };
   }

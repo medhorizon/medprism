@@ -1,6 +1,6 @@
 /** Development-only HTTP adapter. Packaged Electron uses typed IPC. */
 import http from "node:http";
-import { compileProject } from "../../electron/compile/core.mjs";
+import { compileProject, exportWordProject, importDocxProject } from "../../electron/compile/core.mjs";
 
 const PORT = Number(process.env.PORT || 8788);
 const MAX_BODY_BYTES = 25 * 1024 * 1024;
@@ -53,6 +53,34 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "POST" && (url.pathname === "/api/compile" || url.pathname === "/compile")) {
     try {
       const result = await compileProject(await readJson(req));
+      sendJson(res, result.ok ? 200 : 400, result, origin);
+    } catch (error) {
+      sendJson(
+        res,
+        /too large/i.test(String(error)) ? 413 : 400,
+        { ok: false, log: "", error: error instanceof Error ? error.message : String(error) },
+        origin,
+      );
+    }
+    return;
+  }
+  if (req.method === "POST" && (url.pathname === "/api/export-word" || url.pathname === "/export-word")) {
+    try {
+      const result = await exportWordProject(await readJson(req));
+      sendJson(res, result.ok ? 200 : 400, result, origin);
+    } catch (error) {
+      sendJson(
+        res,
+        /too large/i.test(String(error)) ? 413 : 400,
+        { ok: false, log: "", error: error instanceof Error ? error.message : String(error) },
+        origin,
+      );
+    }
+    return;
+  }
+  if (req.method === "POST" && (url.pathname === "/api/import-word" || url.pathname === "/import-word")) {
+    try {
+      const result = await importDocxProject(await readJson(req));
       sendJson(res, result.ok ? 200 : 400, result, origin);
     } catch (error) {
       sendJson(

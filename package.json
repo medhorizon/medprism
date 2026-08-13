@@ -1,7 +1,7 @@
 {
   "name": "medprism",
   "private": true,
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "Medical scientific writing workspace",
   "author": "MedHorizon",
   "type": "module",
@@ -61,8 +61,17 @@
           "arch": [
             "x64"
           ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "x64"
+          ]
         }
       ],
+      "artifactName": "MedPrism-${version}-win64.${ext}"
+    },
+    "portable": {
       "artifactName": "MedPrism-${version}-win64-portable.${ext}"
     },
     "linux": {

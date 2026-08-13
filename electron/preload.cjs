@@ -6,6 +6,8 @@ const CHANNELS = Object.freeze({
   run: "medprism:compile:run",
   cancel: "medprism:compile:cancel",
   available: "medprism:compile:available",
+  exportWord: "medprism:compile:export-word",
+  importWord: "medprism:compile:import-word",
 });
 const PROJECT_CHANNELS = Object.freeze({
   get: "medprism:projects:get",
@@ -33,5 +35,7 @@ contextBridge.exposeInMainWorld("medprismDesktop", {
     run: (request) => ipcRenderer.invoke(CHANNELS.run, request),
     cancel: (jobId) => ipcRenderer.invoke(CHANNELS.cancel, jobId),
     isAvailable: () => ipcRenderer.invoke(CHANNELS.available),
+    exportWord: (request) => ipcRenderer.invoke(CHANNELS.exportWord, request),
+    importWord: (request) => ipcRenderer.invoke(CHANNELS.importWord, request),
   }),
 });

@@ -51,6 +51,17 @@
   width: 100%;
 }
 
+.shell-home-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.shell-home-actions > .btn {
+  flex: 1 1 12rem;
+}
+
 .shell-actions .field-row .btn {
   width: auto;
   flex: none;

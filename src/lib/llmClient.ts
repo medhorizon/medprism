@@ -48,10 +48,28 @@ export function isUsableLlmConfig(
   return Boolean(config.baseUrl?.trim() && config.apiKey?.trim() && config.model?.trim());
 }
 
+export const LLM_DEV_PROXY_PATH = "/__medprism/llm/chat/completions";
+export const LLM_DEV_PROXY_BASE_HEADER = "X-Medprism-LLM-Base";
+
 function joinChatUrl(baseUrl: string): string {
   const base = baseUrl.replace(/\/+$/, "");
   if (base.endsWith("/chat/completions")) return base;
   return `${base}/chat/completions`;
+}
+
+/** Browser Vite/Electron-dev: same-origin proxy so NewAPI CORS does not block localhost. */
+export function chatCompletionsRequest(
+  baseUrl: string,
+  useDevProxy = Boolean(import.meta.env.DEV && typeof window !== "undefined"),
+): { url: string; headers: Record<string, string> } {
+  const trimmed = baseUrl.trim();
+  if (useDevProxy) {
+    return {
+      url: LLM_DEV_PROXY_PATH,
+      headers: { [LLM_DEV_PROXY_BASE_HEADER]: trimmed },
+    };
+  }
+  return { url: joinChatUrl(trimmed), headers: {} };
 }
 
 /** Extract incremental text from one OpenAI-compatible SSE JSON payload. */
@@ -109,14 +127,15 @@ export async function chatCompletions(args: {
     throw new LlmClientError("not_configured", "LLM is not configured");
   }
 
-  const url = joinChatUrl(config.baseUrl);
+  const target = chatCompletionsRequest(config.baseUrl);
   let response: Response;
   try {
-    response = await fetch(url, {
+    response = await fetch(target.url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${config.apiKey}`,
+        ...target.headers,
       },
       body: JSON.stringify({
         model: config.model,
@@ -139,10 +158,10 @@ export async function chatCompletions(args: {
     throw new LlmClientError("unauthorized", "Unauthorized", response.status);
   }
   if (!response.ok) {
-    const detail = await safeText(response);
+    const detail = formatLlmHttpErrorDetail(await safeText(response), response.status);
     throw new LlmClientError(
-      "http",
-      detail || `HTTP ${response.status}`,
+      isProxyNetworkFailure(response.status, detail) ? "cors_or_network" : "http",
+      detail,
       response.status,
     );
   }
@@ -204,6 +223,32 @@ function extractContent(data: unknown): string | null {
   const content = message?.content;
   if (typeof content === "string") return content;
   return null;
+}
+
+export function formatLlmHttpErrorDetail(body: string, status: number): string {
+  const trimmed = body.trim();
+  if (!trimmed) return `HTTP ${status}`;
+  try {
+    const parsed = JSON.parse(trimmed) as { error?: unknown; message?: unknown };
+    if (typeof parsed.error === "string" && parsed.error.trim()) return parsed.error;
+    if (parsed.error && typeof parsed.error === "object") {
+      const message = (parsed.error as { message?: unknown }).message;
+      if (typeof message === "string" && message.trim()) return message;
+    }
+    if (typeof parsed.message === "string" && parsed.message.trim()) return parsed.message;
+  } catch {
+    // Keep the raw body when it is not JSON.
+  }
+  return trimmed;
+}
+
+function isProxyNetworkFailure(status: number, detail: string): boolean {
+  return (
+    status >= 500 &&
+    /fetch failed|ECONNREFUSED|ENOTFOUND|ETIMEDOUT|ECONNRESET|UND_ERR_|certificate|unable to verify/i.test(
+      detail,
+    )
+  );
 }
 
 async function safeText(response: Response): Promise<string> {

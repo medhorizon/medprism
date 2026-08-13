@@ -113,6 +113,7 @@ function chooseMainFile(input: ContextInput, activeFile: string): string | undef
 }
 
 function localExcerpt(content: string, cursor: number, selection?: TextSelection, radius = 1200): string {
+  if (isBinaryFileContent(content)) return "";
   const startAt = selection?.start ?? cursor;
   const endAt = selection?.end ?? cursor;
   const start = Math.max(0, startAt - radius);
@@ -131,8 +132,14 @@ function fileKind(path: string): ContextFileKind {
   return "other";
 }
 
-function textResource(content: string): { content: string; truncated: boolean } {
-  if (isBinaryFileContent(content)) return { content: "", truncated: true };
+function omittedPlaceholder(): { content: string; truncated: boolean } {
+  return { content: "", truncated: true };
+}
+
+function textResource(path: string, content: string): { content: string; truncated: boolean } {
+  if (isBinaryFileContent(content) || fileKind(path) === "image" || fileKind(path) === "template") {
+    return omittedPlaceholder();
+  }
   return {
     content: content.slice(0, TEXT_RESOURCE_LIMIT),
     truncated: content.length > TEXT_RESOURCE_LIMIT,
@@ -203,7 +210,7 @@ export async function buildContextSnapshot(input: ContextInput): Promise<Context
     }
     if (start !== end) {
       selection = { start, end };
-      selectedText = content.slice(start, end);
+      selectedText = isBinaryFileContent(content) ? "" : content.slice(start, end);
     }
   }
 
@@ -219,12 +226,11 @@ export async function buildContextSnapshot(input: ContextInput): Promise<Context
   }));
   const bibliographies = fileTree
     .filter((file) => file.kind === "bib")
-    .map(({ path }) => ({ path, ...textResource(files[path]!) }));
+    .map(({ path }) => ({ path, ...textResource(path, files[path]!) }));
   const resources: Array<ContextSnapshot["resources"][number]> = [];
   for (const { path, kind } of fileTree) {
     if (kind !== "image" && kind !== "template" && kind !== "instructions") continue;
-    if (kind === "image") resources.push({ path, kind, exists: true });
-    else resources.push({ path, kind, exists: true, ...textResource(files[path]!) });
+    resources.push({ path, kind, exists: true, ...textResource(path, files[path]!) });
   }
   const log = (input.lastCompileLog ?? "").slice(-COMPILE_LOG_LIMIT);
   const memoryNotes = input.memoryNotes?.replace(/\r\n?/g, "\n").trim();
@@ -234,7 +240,15 @@ export async function buildContextSnapshot(input: ContextInput): Promise<Context
     projectRevision: await projectRevision(files),
     files,
     fileTree,
-    ...(mainFile ? { mainFile, mainDocument: { path: mainFile, content: files[mainFile]! } } : {}),
+    ...(mainFile
+      ? {
+          mainFile,
+          mainDocument: {
+            path: mainFile,
+            content: isBinaryFileContent(files[mainFile]!) ? "" : files[mainFile]!,
+          },
+        }
+      : {}),
     activeFile,
     activeFileSha256: await sha256Hex(content),
     cursor,

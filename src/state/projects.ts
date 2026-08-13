@@ -143,6 +143,27 @@ export async function createProjectFromBundledTemplate(args: {
   return createProjectFromExtracted({ ...args, extracted });
 }
 
+export function createProjectFromFiles(args: {
+  title: string;
+  templateId: string;
+  templateName: string;
+  files: Record<string, string>;
+  mainFile: string;
+}): Project | null {
+  const project = newProject({
+    id: crypto.randomUUID(),
+    title: args.title.trim() || args.templateName,
+    updatedAt: new Date().toISOString(),
+    templateId: args.templateId,
+    templateName: args.templateName,
+    files: { ...args.files },
+    mainFile: args.mainFile,
+    fileOrder: Object.keys(args.files),
+  });
+  const saved = remember(store().saveProject(project, { expectedRevision: 0 }));
+  return saved.ok ? saved.value : null;
+}
+
 export function ensureDemoProject(): Project {
   const existing = getProject(DEMO_PROJECT_ID);
   if (existing) return existing;

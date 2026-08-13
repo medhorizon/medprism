@@ -35,15 +35,18 @@ describe("unified context package", () => {
     expect(packageValue.bibliographies).toEqual([
       { path: "refs.bib", content: "@article{verified, title={Verified}}", truncated: false },
     ]);
-    expect(packageValue.resources.map((resource) => resource.path)).toEqual([
-      "README.md",
-      "figures/result.png",
-      "journal.cls",
+    expect(packageValue.resources).toEqual([
+      { path: "README.md", kind: "instructions", exists: true, content: "Follow the journal template.", truncated: false },
+      { path: "figures/result.png", kind: "image", exists: true, content: "", truncated: true },
+      { path: "journal.cls", kind: "template", exists: true, content: "", truncated: true },
     ]);
     expect(packageValue.conversation.confirmedImagePaths).toEqual(["figures/result.png"]);
     const prompt = formatContextPackage(packageValue);
     expect(prompt).toContain("Insert the confirmed result figure");
+    expect(prompt).toContain("figures/result.png");
+    expect(prompt).toContain("journal.cls");
     expect(prompt).not.toContain("c2VjcmV0LWJ5dGVz");
+    expect(prompt).not.toContain("NeedsTeXFormat");
   });
 
   it("preserves a collapsed caret and derives only real mentioned image paths", async () => {

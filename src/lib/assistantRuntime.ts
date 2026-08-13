@@ -25,7 +25,6 @@ import type { ChatMessage, ChatSuggestion } from "../types/chat";
 import {
   buildContextPackage,
   deriveConversationContext,
-  injectContextPackage,
 } from "./context/snapshot";
 
 ensureToolsRegistered();
@@ -108,7 +107,7 @@ export async function runAssistant(req: RuntimeRequest): Promise<RuntimeResult> 
     const classified = await classifyWorkflowKind({
       config: req.config,
       userText: req.userText,
-      history: injectContextPackage(req.history, contextPackage),
+      history: req.history,
       ...(req.signal ? { signal: req.signal } : {}),
     });
     route = routeWorkflow({

@@ -1,11 +1,15 @@
 import { describe, expect, it } from "vitest";
+import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
   bibliographyFailure,
   compileProject,
+  exportWordProject,
   filesWithRootBibliographyStyles,
+  importDocxProject,
   validateCompileRequest,
 } from "./core.mjs";
 
@@ -149,5 +153,124 @@ describe.skipIf(process.platform === "win32")("Electron compile core", () => {
     } finally {
       await fs.rm(fake.directory, { recursive: true, force: true });
     }
+  });
+});
+
+function fakePandocSpawn({ writeBytes, empty = false } = {}) {
+  return (executable, args, options) => {
+    const child = new EventEmitter();
+    child.stdout = new EventEmitter();
+    child.stderr = new EventEmitter();
+    child.kill = () => undefined;
+    setImmediate(() => {
+      if (!empty) {
+        const output = args[args.indexOf("-o") + 1];
+        const full = path.resolve(options.cwd, output);
+        mkdirSync(path.dirname(full), { recursive: true });
+        writeFileSync(full, writeBytes ?? Buffer.from("PK\x03\x04fake-docx"));
+      }
+      child.emit("close", 0, null);
+    });
+    return child;
+  };
+}
+
+describe("Word export", () => {
+  it("returns ok and docxBase64 when pandoc writes a document", async () => {
+    const payload = Buffer.from("PK\x03\x04fake-docx");
+    const result = await exportWordProject(
+      { files: { "main.tex": "\\documentclass{article}\\begin{document}你好\\end{document}" }, mainFile: "main.tex" },
+      { spawnImpl: fakePandocSpawn({ writeBytes: payload }), timeoutMs: 2000 },
+    );
+    expect(result.ok).toBe(true);
+    expect(result.docxBase64).toBe(payload.toString("base64"));
+  });
+
+  it("returns OUTPUT_MISSING when pandoc exits 0 without writing a document", async () => {
+    const result = await exportWordProject(
+      { files: { "main.tex": "x" }, mainFile: "main.tex" },
+      { spawnImpl: fakePandocSpawn({ empty: true }), timeoutMs: 2000 },
+    );
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe("OUTPUT_MISSING");
+  });
+
+  it("returns ENGINE_UNAVAILABLE when the executable does not exist", async () => {
+    const result = await exportWordProject(
+      { files: { "main.tex": "x" }, mainFile: "main.tex" },
+      { executable: path.join(os.tmpdir(), `medprism-missing-pandoc-${Date.now()}`), timeoutMs: 2000 },
+    );
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe("ENGINE_UNAVAILABLE");
+    expect(result.error).toBe("Pandoc not found");
+  });
+
+  it("rewrites journal authors and passes a reference document to pandoc", async () => {
+    const payload = Buffer.from("PK\x03\x04fake-docx");
+    let capturedArgs;
+    let capturedTex;
+    const spawnImpl = (executable, args, options) => {
+      capturedArgs = args;
+      capturedTex = readFileSync(path.resolve(options.cwd, "main.tex"), "utf8");
+      return fakePandocSpawn({ writeBytes: payload })(executable, args, options);
+    };
+    const result = await exportWordProject(
+      {
+        files: {
+          "main.tex": [
+            "\\documentclass{sn-jnl}",
+            "\\begin{document}",
+            "\\title{Paper}",
+            "\\author*[1]{\\fnm{Ada} \\sur{Lovelace}}\\email{ada@lab.edu}",
+            "\\affil[1]{\\orgname{Lab}}",
+            "\\maketitle",
+            "Hi.",
+            "\\end{document}",
+            "",
+          ].join("\n"),
+        },
+        mainFile: "main.tex",
+      },
+      { spawnImpl, timeoutMs: 2000 },
+    );
+    expect(result.ok).toBe(true);
+    expect(capturedArgs).toContain("--reference-doc");
+    expect(capturedTex).toContain("Ada Lovelace");
+    expect(capturedTex).toContain("Corresponding author");
+    expect(capturedTex).toContain("ada@lab.edu");
+  });
+});
+
+describe("Word import", () => {
+  const docxBase64 = Buffer.from("fake-docx").toString("base64");
+
+  it("returns utf8 markdown including CJK when pandoc writes out.md", async () => {
+    const markdown = "\uFEFF# 中文标题\n";
+    const result = await importDocxProject(
+      { docxBase64 },
+      { spawnImpl: fakePandocSpawn({ writeBytes: Buffer.from(markdown, "utf8") }), timeoutMs: 2000 },
+    );
+    expect(result.ok).toBe(true);
+    expect(result.markdown).toContain("中文标题");
+    expect(result.markdown?.startsWith("\uFEFF")).toBe(false);
+  });
+
+  it("returns OUTPUT_MISSING when pandoc writes empty markdown", async () => {
+    const result = await importDocxProject(
+      { docxBase64 },
+      { spawnImpl: fakePandocSpawn({ writeBytes: Buffer.from("  \n", "utf8") }), timeoutMs: 2000 },
+    );
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe("OUTPUT_MISSING");
+  });
+
+  it("returns ENGINE_UNAVAILABLE when the executable does not exist", async () => {
+    const result = await importDocxProject(
+      { docxBase64 },
+      { executable: path.join(os.tmpdir(), `medprism-missing-pandoc-${Date.now()}`), timeoutMs: 2000 },
+    );
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe("ENGINE_UNAVAILABLE");
+    expect(result.error).toBe("Pandoc not found");
   });
 });

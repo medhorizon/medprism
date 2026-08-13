@@ -20,6 +20,24 @@ export type CompileResult = {
   projectRevision?: string;
 };
 
+export type WordExportResult = {
+  ok: boolean;
+  jobId?: string;
+  code?: string;
+  log?: string;
+  docxBase64?: string;
+  error?: string;
+};
+
+export type WordImportResult = {
+  ok: boolean;
+  jobId?: string;
+  code?: string;
+  log?: string;
+  markdown?: string;
+  error?: string;
+};
+
 export async function compileProject(
   request: CompileRequest,
   signal?: AbortSignal,
@@ -72,6 +90,80 @@ export async function compileProject(
       code: signal?.aborted ? "CANCELLED" : "SERVICE_UNAVAILABLE",
       log: "",
       error: error instanceof Error ? error.message : "Compile service unavailable",
+    };
+  }
+}
+
+export async function exportProjectWord(request: CompileRequest): Promise<WordExportResult> {
+  const exportRequest: CompileRequest = {
+    ...request,
+    files: filesForCompile(request.files, request.mainFile),
+  };
+  if (window.medprismDesktop?.compile?.exportWord) {
+    try {
+      return await window.medprismDesktop.compile.exportWord(exportRequest);
+    } catch (error) {
+      return {
+        ok: false,
+        code: "SERVICE_UNAVAILABLE",
+        log: "",
+        error: error instanceof Error ? error.message : "Electron Word export unavailable",
+      };
+    }
+  }
+
+  try {
+    const response = await fetch("/api/export-word", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(exportRequest),
+    });
+    const result = (await response.json()) as WordExportResult;
+    if (!response.ok && !result.error) {
+      return { ...result, ok: false, error: `Word export HTTP ${response.status}` };
+    }
+    return result;
+  } catch (error) {
+    return {
+      ok: false,
+      code: "SERVICE_UNAVAILABLE",
+      log: "",
+      error: error instanceof Error ? error.message : "Word export service unavailable",
+    };
+  }
+}
+
+export async function importWordMarkdown(request: { docxBase64: string }): Promise<WordImportResult> {
+  if (window.medprismDesktop?.compile?.importWord) {
+    try {
+      return await window.medprismDesktop.compile.importWord(request);
+    } catch (error) {
+      return {
+        ok: false,
+        code: "SERVICE_UNAVAILABLE",
+        log: "",
+        error: error instanceof Error ? error.message : "Electron Word import unavailable",
+      };
+    }
+  }
+
+  try {
+    const response = await fetch("/api/import-word", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    });
+    const result = (await response.json()) as WordImportResult;
+    if (!response.ok && !result.error) {
+      return { ...result, ok: false, error: `Word import HTTP ${response.status}` };
+    }
+    return result;
+  } catch (error) {
+    return {
+      ok: false,
+      code: "SERVICE_UNAVAILABLE",
+      log: "",
+      error: error instanceof Error ? error.message : "Word import service unavailable",
     };
   }
 }

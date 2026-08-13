@@ -7,6 +7,8 @@ const CHANNELS = Object.freeze({
   run: "medprism:compile:run",
   cancel: "medprism:compile:cancel",
   available: "medprism:compile:available",
+  exportWord: "medprism:compile:export-word",
+  importWord: "medprism:compile:import-word",
 });
 
 function registerCompileService(ipcMain, options = {}) {
@@ -53,6 +55,16 @@ function registerCompileService(ipcMain, options = {}) {
     return isCompileEngineAvailable(
       options.executable ? { executable: options.executable } : undefined,
     );
+  });
+
+  ipcMain.handle(CHANNELS.exportWord, async (_event, request) => {
+    const { exportWordProject } = await loadCore();
+    return exportWordProject(request);
+  });
+
+  ipcMain.handle(CHANNELS.importWord, async (_event, request) => {
+    const { importDocxProject } = await loadCore();
+    return importDocxProject(request);
   });
 
   return () => {

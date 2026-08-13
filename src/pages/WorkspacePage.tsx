@@ -11,6 +11,7 @@ import type { WorkflowKind } from "../lib/workflows/types";
 import { compileProject } from "../lib/compileClient";
 import { projectRevision } from "../lib/patch/revision";
 import { downloadProjectZip } from "../lib/exportZip";
+import { downloadProjectWord } from "../lib/wordExport";
 import { toLlmHistory } from "../lib/chatHistory";
 import { isUsableLlmConfig, LlmClientError } from "../lib/llmClient";
 import {
@@ -638,7 +639,8 @@ export function WorkspacePage() {
       if (error.code === "not_configured") return t("assistant.needConfig");
       if (error.code === "unauthorized") return t("assistant.errorUnauthorized");
       if (error.code === "cors_or_network" || error.code === "network") {
-        return t("assistant.errorNetwork");
+        if (/other side closed/i.test(error.message)) return t("assistant.errorUpstreamClosed");
+        return t("assistant.errorNetwork", { detail: error.message });
       }
       if (error.code === "bad_response") return t("assistant.errorBadResponse");
       if (
@@ -654,7 +656,7 @@ export function WorkspacePage() {
       }
       return t("assistant.errorHttp", { detail: error.message });
     }
-    return t("assistant.errorNetwork");
+    return error instanceof Error ? error.message : t("assistant.errorNetwork");
   }
 
   async function send(text: string, explicitWorkflow?: WorkflowKind) {
@@ -976,6 +978,34 @@ export function WorkspacePage() {
     }
   }
 
+  async function exportWord() {
+    const current = projectRef.current;
+    if (!current) return;
+    const safeName = current.title.replace(/[\\/:*?"<>|]+/g, "-").trim() || "medprism-project";
+    try {
+      const result = await downloadProjectWord(
+        {
+          files: current.files,
+          mainFile: mainFileFor(current),
+        },
+        `${safeName}.docx`,
+      );
+      if (!result.ok) {
+        flash(
+          result.code === "ENGINE_UNAVAILABLE"
+            ? t("workspace.toastExportWordMissing")
+            : t("workspace.toastExportWordFailed"),
+        );
+        return;
+      }
+      flash(t("workspace.toastExportedWord"));
+    } catch (error) {
+      flash(
+        `${t("workspace.toastExportWordFailed")}：${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
   function fixWithAi() {
     setAiOpen(true);
     void send(demo ? t("assistant.demo.q4") : t("assistant.q4"), "compile-fix");
@@ -1005,6 +1035,7 @@ export function WorkspacePage() {
         autoCompile={autoCompile}
         onToggleAssistant={() => setAiOpen((value) => !value)}
         onExport={exportProject}
+        onExportWord={() => void exportWord()}
         onCompile={() => void compile()}
         onCancelCompile={cancelCompile}
         onToggleAutoCompile={toggleAutoCompile}

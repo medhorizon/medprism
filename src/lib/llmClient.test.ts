@@ -1,25 +1,33 @@
 import { describe, expect, it } from "vitest";
-import { consumeSseBuffer, extractStreamDelta } from "./llmClient";
+import {
+  chatCompletionsRequest,
+  formatLlmHttpErrorDetail,
+  LLM_DEV_PROXY_BASE_HEADER,
+  LLM_DEV_PROXY_PATH,
+} from "./llmClient";
 
-describe("llmClient streaming helpers", () => {
-  it("extracts delta content from OpenAI SSE payloads", () => {
-    expect(
-      extractStreamDelta({
-        choices: [{ delta: { content: "Hello" } }],
-      }),
-    ).toBe("Hello");
-    expect(extractStreamDelta({ choices: [{ delta: {} }] })).toBe("");
+describe("chatCompletionsRequest", () => {
+  it("uses the Vite same-origin proxy in the browser dev server", () => {
+    const target = chatCompletionsRequest("https://newapi.example.com/v1", true);
+    expect(target.url).toBe(LLM_DEV_PROXY_PATH);
+    expect(target.headers[LLM_DEV_PROXY_BASE_HEADER]).toBe("https://newapi.example.com/v1");
   });
 
-  it("consumes framed SSE buffers and keeps an incomplete trailer", () => {
-    const first = consumeSseBuffer(
-      'data: {"choices":[{"delta":{"content":"Hel"}}]}\n\ndata: {"choices":[{"delta":{"content":"lo"}}]}\n\ndata: {"choices":[{"delta":{"content":"!"}}]}',
-    );
-    expect(first.deltas).toEqual(["Hel", "lo"]);
-    expect(first.rest.startsWith("data:")).toBe(true);
-
-    const second = consumeSseBuffer(`${first.rest}\n\ndata: [DONE]\n\n`);
-    expect(second.deltas).toEqual(["!"]);
-    expect(second.rest).toBe("");
+  it("calls the configured host directly outside the Vite dev server", () => {
+    const target = chatCompletionsRequest("https://newapi.example.com/v1", false);
+    expect(target.url).toBe("https://newapi.example.com/v1/chat/completions");
+    expect(target.headers).toEqual({});
   });
 });
+
+describe("formatLlmHttpErrorDetail", () => {
+  it("unwraps a proxy fetch-failed JSON body", () => {
+    expect(
+      formatLlmHttpErrorDetail(
+        '{"error":"fetch failed: connect ETIMEDOUT 1.2.3.4:443 (https://newapi.example.com)"}',
+        502,
+      ),
+    ).toBe("fetch failed: connect ETIMEDOUT 1.2.3.4:443 (https://newapi.example.com)");
+  });
+});
+

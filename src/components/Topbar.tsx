@@ -10,6 +10,7 @@ type TopbarProps = {
   autoCompile: boolean;
   onToggleAssistant: () => void;
   onExport: () => void;
+  onExportWord?: () => void;
   onCompile: () => void;
   onCancelCompile?: () => void;
   onToggleAutoCompile: () => void;
@@ -25,6 +26,7 @@ export function Topbar({
   autoCompile,
   onToggleAssistant,
   onExport,
+  onExportWord,
   onCompile,
   onCancelCompile,
   onToggleAutoCompile,
@@ -97,6 +99,11 @@ export function Topbar({
         <button className="btn btn-secondary" type="button" onClick={onExport}>
           {t("topbar.export")}
         </button>
+        {onExportWord && (
+          <button className="btn btn-ghost" type="button" onClick={onExportWord}>
+            {t("topbar.exportWord")}
+          </button>
+        )}
         <div
           className={`compile-control${flyoutOpen || autoCompile ? " is-open" : ""}`}
           ref={groupRef}

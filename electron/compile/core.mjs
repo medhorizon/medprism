@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { spawn as nodeSpawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import { assertSafeProjectRelativePath } from "../../shared/project-path.mjs";
+import { prepareLatexForWordExport } from "./word-latex.mjs";
+
+const WORD_REFERENCE_DOCX = path.join(path.dirname(fileURLToPath(import.meta.url)), "word-reference.docx");
 
 export const COMPILE_LIMITS = Object.freeze({
   maxFiles: 600,
@@ -174,16 +178,29 @@ export function bibliographyFailure(log) {
   return /Package natbib Warning: There were undefined citations\./i.test(finalPass);
 }
 
-function runProcess({ cwd, mainFile, synctex, signal, executable, spawnImpl, timeoutMs }) {
+function pandocUtf8Environment() {
+  const env = limitedEnvironment();
+  if (!env.LANG && !env.LC_ALL) {
+    env.LANG = "C.UTF-8";
+    env.LC_ALL = "C.UTF-8";
+  }
+  return env;
+}
+
+function runProcess({
+  cwd,
+  args,
+  signal,
+  executable,
+  spawnImpl,
+  timeoutMs,
+  startErrorLabel = "process",
+  env = limitedEnvironment(),
+}) {
   return new Promise((resolve) => {
-    const args = [
-      "-X", "compile", "--untrusted", "--print", "--reruns", "2", "--outfmt", "pdf",
-      ...(synctex ? ["--synctex"] : []),
-      mainFile,
-    ];
     const child = spawnImpl(executable, args, {
       cwd,
-      env: limitedEnvironment(),
+      env,
       shell: false,
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
@@ -241,8 +258,12 @@ function runProcess({ cwd, mainFile, synctex, signal, executable, spawnImpl, tim
     child.stdout?.on("data", (chunk) => appendLog(log, chunk));
     child.stderr?.on("data", (chunk) => appendLog(log, chunk));
     child.on("error", (error) => {
-      appendLog(log, `\n[medprism] Failed to start Tectonic: ${error.message}\n`);
-      finish({ code: 1, spawnError: error.message });
+      appendLog(log, `\n[medprism] Failed to start ${startErrorLabel}: ${error.message}\n`);
+      finish({
+        code: 1,
+        spawnError: error.message,
+        spawnCode: error && typeof error === "object" ? error.code : undefined,
+      });
     });
     child.on("close", (code, processSignal) => {
       closed = true;
@@ -283,6 +304,21 @@ async function readCompiledSyncTex(root, mainFile) {
   return null;
 }
 
+function failedRequestResult(error, jobId) {
+  return {
+    ok: false,
+    jobId,
+    code:
+      error instanceof CompileServiceError
+        ? error.code
+        : error && typeof error === "object" && error.name === "UnsafeProjectPathError"
+          ? "UNSAFE_PATH"
+          : "INVALID_REQUEST",
+    log: "",
+    error: error instanceof Error ? error.message : String(error),
+  };
+}
+
 export async function compileProject(
   rawRequest,
   {
@@ -298,18 +334,7 @@ export async function compileProject(
     request = validateCompileRequest(rawRequest);
     jobId = request.jobId;
   } catch (error) {
-    return {
-      ok: false,
-      jobId,
-      code:
-        error instanceof CompileServiceError
-          ? error.code
-          : error && typeof error === "object" && error.name === "UnsafeProjectPathError"
-            ? "UNSAFE_PATH"
-            : "INVALID_REQUEST",
-      log: "",
-      error: error instanceof Error ? error.message : String(error),
-    };
+    return failedRequestResult(error, jobId);
   }
 
   let root;
@@ -318,12 +343,16 @@ export async function compileProject(
     await writeTextProject(root, request.files);
     const processResult = await runProcess({
       cwd: root,
-      mainFile: request.mainFile,
-      synctex: request.synctex,
+      args: [
+        "-X", "compile", "--untrusted", "--print", "--reruns", "2", "--outfmt", "pdf",
+        ...(request.synctex ? ["--synctex"] : []),
+        request.mainFile,
+      ],
       signal,
       executable,
       spawnImpl,
       timeoutMs,
+      startErrorLabel: "Tectonic",
     });
     if (processResult.cancelled) {
       return {
@@ -406,6 +435,259 @@ export async function compileProject(
       log: "",
       error: error instanceof Error ? error.message : String(error),
       projectRevision: request.projectRevision,
+    };
+  } finally {
+    if (root) await fs.rm(root, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+const WORD_EXPORT_TIMEOUT_MS = 60_000;
+
+async function readExportedDocx(root, outputFile) {
+  const candidates = [
+    path.resolve(root, ...outputFile.split("/")),
+    path.resolve(root, path.basename(outputFile)),
+  ];
+  for (const candidate of candidates) {
+    try {
+      return await fs.readFile(candidate);
+    } catch {
+      // Try next Pandoc output location.
+    }
+  }
+  return null;
+}
+
+export async function exportWordProject(
+  rawRequest,
+  {
+    signal,
+    executable = process.env.MEDPRISM_PANDOC_PATH || "pandoc",
+    spawnImpl = nodeSpawn,
+    timeoutMs = WORD_EXPORT_TIMEOUT_MS,
+  } = {},
+) {
+  let request;
+  let jobId = randomUUID();
+  try {
+    request = validateCompileRequest(rawRequest);
+    jobId = request.jobId;
+  } catch (error) {
+    return failedRequestResult(error, jobId);
+  }
+
+  const outputFile = request.mainFile.replace(/\.tex$/i, ".docx");
+  let root;
+  try {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "medprism-word-"));
+    const files = { ...request.files };
+    const mainSource = files[request.mainFile];
+    if (typeof mainSource === "string") {
+      files[request.mainFile] = prepareLatexForWordExport(mainSource);
+    }
+    await writeTextProject(root, files);
+    const args = [request.mainFile, "-o", outputFile, "--from", "latex"];
+    if (typeof files[request.mainFile] === "string" && /\\tableofcontents\b/.test(files[request.mainFile])) {
+      args.push("--toc");
+    }
+    args.push("--reference-doc", WORD_REFERENCE_DOCX);
+    const processResult = await runProcess({
+      cwd: root,
+      args,
+      signal,
+      executable,
+      spawnImpl,
+      timeoutMs,
+      startErrorLabel: "Pandoc",
+      env: pandocUtf8Environment(),
+    });
+    if (processResult.cancelled) {
+      return {
+        ok: false,
+        jobId,
+        code: "CANCELLED",
+        log: processResult.log,
+        error: "Word export cancelled",
+      };
+    }
+    if (processResult.timedOut) {
+      return {
+        ok: false,
+        jobId,
+        code: "TIMEOUT",
+        log: processResult.log,
+        error: `Word export exceeded ${timeoutMs} ms`,
+      };
+    }
+    if (processResult.spawnCode === "ENOENT") {
+      return {
+        ok: false,
+        jobId,
+        code: "ENGINE_UNAVAILABLE",
+        log: processResult.log,
+        error: "Pandoc not found",
+      };
+    }
+    if (processResult.code !== 0) {
+      return {
+        ok: false,
+        jobId,
+        code: processResult.spawnError ? "ENGINE_UNAVAILABLE" : "EXPORT_FAILED",
+        log: processResult.log,
+        error: processResult.spawnError || "Pandoc export failed",
+      };
+    }
+    const docx = await readExportedDocx(root, outputFile);
+    if (!docx) {
+      return {
+        ok: false,
+        jobId,
+        code: "OUTPUT_MISSING",
+        log: processResult.log,
+        error: "Pandoc exited successfully but no Word document was found",
+      };
+    }
+    return {
+      ok: true,
+      jobId,
+      log: processResult.log,
+      docxBase64: docx.toString("base64"),
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      jobId,
+      code: error instanceof CompileServiceError ? error.code : "INTERNAL_ERROR",
+      log: "",
+      error: error instanceof Error ? error.message : String(error),
+    };
+  } finally {
+    if (root) await fs.rm(root, { recursive: true, force: true }).catch(() => undefined);
+  }
+}
+
+const WORD_IMPORT_MAX_BYTES = 15 * 1024 * 1024;
+
+function validateWordImportRequest(rawRequest) {
+  if (!rawRequest || typeof rawRequest !== "object") {
+    throw new CompileServiceError("INVALID_REQUEST", "Word import request must be an object");
+  }
+  if (rawRequest.jobId !== undefined &&
+      (typeof rawRequest.jobId !== "string" || !/^[A-Za-z0-9_.:-]{1,128}$/.test(rawRequest.jobId))) {
+    throw new CompileServiceError("INVALID_REQUEST", "jobId is invalid");
+  }
+  if (typeof rawRequest.docxBase64 !== "string" || rawRequest.docxBase64.length === 0) {
+    throw new CompileServiceError("INVALID_REQUEST", "docxBase64 must be a non-empty string");
+  }
+  const bytes = Buffer.from(rawRequest.docxBase64, "base64");
+  if (bytes.length === 0) {
+    throw new CompileServiceError("INVALID_REQUEST", "docxBase64 is empty");
+  }
+  if (bytes.length > WORD_IMPORT_MAX_BYTES) {
+    throw new CompileServiceError("LIMIT_EXCEEDED", "Word document exceeds 15MB");
+  }
+  return {
+    bytes,
+    jobId: rawRequest.jobId || randomUUID(),
+  };
+}
+
+export async function importDocxProject(
+  rawRequest,
+  {
+    signal,
+    executable = process.env.MEDPRISM_PANDOC_PATH || "pandoc",
+    spawnImpl = nodeSpawn,
+    timeoutMs = WORD_EXPORT_TIMEOUT_MS,
+  } = {},
+) {
+  let request;
+  let jobId = randomUUID();
+  try {
+    request = validateWordImportRequest(rawRequest);
+    jobId = request.jobId;
+  } catch (error) {
+    return failedRequestResult(error, jobId);
+  }
+
+  let root;
+  try {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "medprism-docx-"));
+    await fs.writeFile(path.join(root, "input.docx"), request.bytes);
+    const processResult = await runProcess({
+      cwd: root,
+      args: ["input.docx", "-f", "docx", "-t", "markdown", "--wrap=none", "-o", "out.md"],
+      signal,
+      executable,
+      spawnImpl,
+      timeoutMs,
+      startErrorLabel: "Pandoc",
+      env: pandocUtf8Environment(),
+    });
+    if (processResult.cancelled) {
+      return {
+        ok: false,
+        jobId,
+        code: "CANCELLED",
+        log: processResult.log,
+        error: "Word import cancelled",
+      };
+    }
+    if (processResult.timedOut) {
+      return {
+        ok: false,
+        jobId,
+        code: "TIMEOUT",
+        log: processResult.log,
+        error: `Word import exceeded ${timeoutMs} ms`,
+      };
+    }
+    if (processResult.spawnCode === "ENOENT") {
+      return {
+        ok: false,
+        jobId,
+        code: "ENGINE_UNAVAILABLE",
+        log: processResult.log,
+        error: "Pandoc not found",
+      };
+    }
+    if (processResult.code !== 0) {
+      return {
+        ok: false,
+        jobId,
+        code: processResult.spawnError ? "ENGINE_UNAVAILABLE" : "IMPORT_FAILED",
+        log: processResult.log,
+        error: processResult.spawnError || "Pandoc import failed",
+      };
+    }
+    let markdown = "";
+    try {
+      markdown = (await fs.readFile(path.join(root, "out.md"), "utf8")).replace(/^\uFEFF/, "");
+    } catch {
+      markdown = "";
+    }
+    if (!markdown.trim()) {
+      return {
+        ok: false,
+        jobId,
+        code: "OUTPUT_MISSING",
+        log: processResult.log,
+        error: "Pandoc exited successfully but no markdown was found",
+      };
+    }
+    return {
+      ok: true,
+      jobId,
+      markdown,
+      log: processResult.log,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      jobId,
+      code: error instanceof CompileServiceError ? error.code : "INTERNAL_ERROR",
+      log: "",
+      error: error instanceof Error ? error.message : String(error),
     };
   } finally {
     if (root) await fs.rm(root, { recursive: true, force: true }).catch(() => undefined);

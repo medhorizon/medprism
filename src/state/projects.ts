@@ -13,13 +13,15 @@ import {
   type StoreError,
   type StoreResult,
 } from "./projectStore";
+import { migrateProjectsToDesktop, projectStorage } from "./projectStorage";
 
 export type { Project } from "./projectStore";
 
 let lastStoreError: StoreError | null = null;
 
 function store(): ProjectStore {
-  return new ProjectStore(localStorage);
+  migrateProjectsToDesktop();
+  return new ProjectStore(projectStorage());
 }
 
 function remember<T>(result: StoreResult<T>): StoreResult<T> {

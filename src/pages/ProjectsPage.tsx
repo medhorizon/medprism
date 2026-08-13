@@ -59,11 +59,22 @@ export function ProjectsPage() {
   const [deleteTarget, setDeleteTarget] = useState<Project | null>(null);
   const [providerOpen, setProviderOpen] = useState(false);
   const [signOutOpen, setSignOutOpen] = useState(false);
+  const [contextMenu, setContextMenu] = useState<{ project: Project; x: number; y: number } | null>(null);
 
   useEffect(() => {
     const storageError = getLastProjectStoreError();
     if (storageError) setError(storageError.message);
   }, []);
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => setContextMenu(null);
+    window.addEventListener("click", close);
+    window.addEventListener("blur", close);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("blur", close);
+    };
+  }, [contextMenu]);
   useEffect(() => {
     // Only open Provider when explicitly requested (?setup=api), never as the default home.
     if (searchParams.get("setup") !== "api") return;
@@ -158,6 +169,13 @@ export function ProjectsPage() {
     setSignOutOpen(false);
   }
 
+  async function openProjectFolder(project: Project) {
+    setContextMenu(null);
+    const result = await window.medprismDesktop?.projects.openFolder(project.id);
+    if (!result) setError(t("projects.folderDesktopOnly"));
+    else if (!result.ok) setError(result.error ?? t("projects.folderOpenFailed"));
+  }
+
   const statusText =
     auth.status === "authenticated"
       ? t("projects.statusSignedIn", { name: auth.displayName || auth.contact || "" })
@@ -215,7 +233,14 @@ export function ProjectsPage() {
 
         <div className="project-list">
           {projects.map((p) => (
-            <div key={p.id} className="project-row project-row-static">
+            <div
+              key={p.id}
+              className="project-row project-row-static"
+              onContextMenu={(event) => {
+                event.preventDefault();
+                setContextMenu({ project: p, x: event.clientX, y: event.clientY });
+              }}
+            >
               <Link className="project-row-main" to={`/p/${p.id}`}>
                 <div className="project-row-title">{p.title}</div>
                 <div className="project-row-meta">
@@ -245,6 +270,19 @@ export function ProjectsPage() {
             </div>
           ))}
         </div>
+
+        {contextMenu && (
+          <div
+            className="project-context-menu"
+            role="menu"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+            onClick={(event) => event.stopPropagation()}
+          >
+            <button type="button" role="menuitem" onClick={() => void openProjectFolder(contextMenu.project)}>
+              {t("projects.openInFolder")}
+            </button>
+          </div>
+        )}
 
         <button className="btn btn-primary" type="button" onClick={openPicker}>
           {t("projects.new")}

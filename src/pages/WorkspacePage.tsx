@@ -60,6 +60,7 @@ import {
   estimateProjectBytes,
 } from "../state/projectStore";
 import { ProjectSaveQueue } from "../state/projectSaveQueue";
+import { projectStorage } from "../state/projectStorage";
 import {
   keepSuggestionTransaction,
   undoSuggestionTransaction,
@@ -175,7 +176,7 @@ export function WorkspacePage() {
     setProject(next);
   }
 
-  if (!storeRef.current) storeRef.current = new ProjectStore(localStorage);
+  if (!storeRef.current) storeRef.current = new ProjectStore(projectStorage());
   if (!saveQueueRef.current) {
     saveQueueRef.current = new ProjectSaveQueue(
       storeRef.current,
@@ -187,6 +188,7 @@ export function WorkspacePage() {
           if (!current || current.id !== saved.id) return;
           setProjectState({ ...current, revision: saved.revision });
           if (
+            !window.medprismDesktop &&
             estimateProjectBytes(saved) >= PROJECT_SOFT_LIMIT_BYTES &&
             sizeWarningProjectRef.current !== saved.id
           ) {

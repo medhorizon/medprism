@@ -1,6 +1,9 @@
 import type { Messages } from "./types";
 
 export const zh: Messages = {
+  "projects.openInFolder": "在文件管理器中打开",
+  "projects.folderDesktopOnly": "此操作仅在桌面版可用。",
+  "projects.folderOpenFailed": "无法打开项目文件夹。",
   "lang.zh": "中文",
   "lang.en": "English",
   "lang.switch": "语言",

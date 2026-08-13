@@ -5,6 +5,12 @@ declare global {
     medprismDesktop?: {
       isDesktop: true;
       platform: string;
+      projects: {
+        getItem(key: string): string | null;
+        setItem(key: string, value: string): void;
+        removeItem(key: string): void;
+        openFolder(id: string): Promise<{ ok: boolean; error?: string }>;
+      };
       compile: {
         run(request: {
           jobId?: string;

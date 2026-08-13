@@ -184,6 +184,31 @@
   flex: none;
 }
 
+.project-context-menu {
+  position: fixed;
+  z-index: 80;
+  min-width: 180px;
+  padding: 4px;
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  background: var(--canvas);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.16);
+}
+
+.project-context-menu button {
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.project-context-menu button:hover {
+  background: var(--hover);
+}
+
 .modal-backdrop {
   position: fixed;
   inset: 0;

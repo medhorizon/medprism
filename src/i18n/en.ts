@@ -63,6 +63,9 @@ export const en: Messages = {
   "projects.apiSettings": "API settings",
   "projects.hostedApiHint":
     "Using hosted API from sign-in (credentials hidden). Custom API settings override until you sign in again.",
+  "projects.openInFolder": "Open in File Explorer",
+  "projects.folderDesktopOnly": "This action is available in the desktop app.",
+  "projects.folderOpenFailed": "Unable to open the project folder.",
   "provider.title": "Model provider",
   "provider.copy": "Enter an OpenAI-compatible Base URL and API Key for the assistant.",
   "provider.name": "Provider name",

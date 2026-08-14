@@ -547,7 +547,7 @@ export function WorkspacePage() {
     const attachmentOnly = Boolean(
       latest && revisionMoved && onlyBinaryAttachmentChanges(snapshotFiles, latest.files),
     );
-    if (revisionMoved && !attachmentOnly) {
+    if (!latest || (revisionMoved && !attachmentOnly)) {
       setCompiled(false);
       flash("编译完成，但源码已发生变化；结果未标记为当前版本。");
       return false;

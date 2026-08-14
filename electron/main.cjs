@@ -190,12 +190,24 @@ function createWindow() {
   });
 }
 
+function startAutoUpdate() {
+  if (!app.isPackaged) return;
+  // Portable builds have no installer to replace.
+  if (process.env.PORTABLE_EXECUTABLE_DIR) return;
+  const { autoUpdater } = require("electron-updater");
+  autoUpdater.on("error", (error) => {
+    console.error("auto-update failed:", error);
+  });
+  void autoUpdater.checkForUpdatesAndNotify();
+}
+
 app.whenReady().then(() => {
   registerProjectStorage();
   disposeCompileService = registerCompileService(ipcMain, {
     executable: resolveTectonicExecutable(),
   });
   createWindow();
+  startAutoUpdate();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

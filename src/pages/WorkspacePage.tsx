@@ -18,6 +18,7 @@ import {
   compiledPdfPath,
   decodeBinaryFile,
   encodeBinaryBytes,
+  onlyBinaryAttachmentChanges,
   withCompiledPdfFiles,
 } from "../lib/projectBinary";
 import { withSuggestionStatus } from "../lib/suggestions";
@@ -542,7 +543,11 @@ export function WorkspacePage() {
 
     const latest = projectRef.current;
     const latestRevision = latest ? await projectRevision(latest.files) : "";
-    if (!latest || latestRevision !== (result.projectRevision ?? revision)) {
+    const revisionMoved = !latest || latestRevision !== (result.projectRevision ?? revision);
+    const attachmentOnly = Boolean(
+      latest && revisionMoved && onlyBinaryAttachmentChanges(snapshotFiles, latest.files),
+    );
+    if (revisionMoved && !attachmentOnly) {
       setCompiled(false);
       flash("编译完成，但源码已发生变化；结果未标记为当前版本。");
       return false;

@@ -125,7 +125,7 @@ export async function hydratePatchProposal(
 
     if (proposed.op === "replace_text") {
       if (options.strictSelection && snapshot.selection) {
-        if (path !== snapshot.activeFile || proposed.oldText !== snapshot.selectedText) {
+        if (path !== snapshot.activeFile || snapshot.selectedText === undefined) {
           return {
             ok: false,
             error: {
@@ -137,11 +137,15 @@ export async function hydratePatchProposal(
           };
         }
       }
+      const oldText =
+        options.strictSelection && snapshot.selectedText !== undefined
+          ? snapshot.selectedText
+          : proposed.oldText;
       operations.push({
         op: "replace_text",
         path,
         baseSha256,
-        oldText: proposed.oldText,
+        oldText,
         newText: proposed.newText,
         expectedOccurrences: 1,
         ...(options.strictSelection && snapshot.selection

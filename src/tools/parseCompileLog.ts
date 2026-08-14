@@ -107,6 +107,16 @@ export function firstRootCompileError(log: string): CompileLogError | undefined 
   );
 }
 
+/** True when the log indicates a source error worth repairing, not warning-only output. */
+export function compileLogNeedsSourceFix(log: string): boolean {
+  if (parseCompileLog(log).some((diagnostic) => diagnostic.severity === "error")) return true;
+  if (/Package natbib Warning: There were undefined citations/i.test(log)) return true;
+  if (/I didn't find a database entry/i.test(log)) return true;
+  const bibIssued = /errors were issued by (?:BibTeX|Biber), but were ignored/i.test(log);
+  const noCiteOnly = /I found no \\citation commands/i.test(log);
+  return bibIssued && !noCiteOnly;
+}
+
 export const parseCompileLogTool: ToolDef = {
   name: "parse_compile_log",
   description: "Parse LaTeX output and identify the first root error without guessing a source file.",

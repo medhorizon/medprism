@@ -1,5 +1,6 @@
 import { chatCompletions } from "../llmClient";
 import { buildContextPackage, injectContextPackage, type ContextPackage } from "../context/snapshot";
+import { formulateSearchQuery } from "../research/formulateQuery";
 import { runResearchStage as runResearchService } from "../research/service";
 import { runTool } from "../../tools/registry";
 import { runAdviceWorkflow } from "./advice";
@@ -247,14 +248,31 @@ export async function executeWorkflow(
   const baseInput: WorkflowExecutionInput = { ...input, request, ctx, contextPackage, services };
 
   if (plan.research) {
+    const selectedText = request.selectedText ?? ctx.selectedText;
+    let researchSpec = plan.research;
+    let formulatedQuery: string | undefined;
+    if (researchSpec.purpose === "citation") {
+      const formulated = await formulateSearchQuery({
+        userText: request.userText,
+        ...(selectedText !== undefined ? { selectedText } : {}),
+        complete: services.complete,
+        config: input.config,
+        ...(input.signal ? { signal: input.signal } : {}),
+      });
+      if (formulated.ok) {
+        formulatedQuery = formulated.query;
+        researchSpec = {
+          ...researchSpec,
+          ...(formulated.sinceYear !== undefined ? { sinceYear: formulated.sinceYear } : {}),
+        };
+        researchNotes.push("research-query:llm");
+      }
+    }
     const researched = await runResearchService({
-      spec: plan.research,
+      spec: researchSpec,
       userText: request.userText,
-      ...(request.selectedText !== undefined
-        ? { selectedText: request.selectedText }
-        : ctx.selectedText !== undefined
-          ? { selectedText: ctx.selectedText }
-          : {}),
+      ...(selectedText !== undefined ? { selectedText } : {}),
+      ...(formulatedQuery !== undefined ? { formulatedQuery } : {}),
       ctx,
       runTool: services.runTool,
     });

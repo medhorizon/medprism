@@ -10,13 +10,16 @@ export type ResearchPurpose =
 
 /**
  * Research is a reusable capability, not a free-running agent.
- * The router/runtime owns the query and tool policy.
+ * Runtime executes paper_search and validates hits. Citation may ask the model
+ * for a keyword query first; that string is validated before search.
  */
 export type ResearchSpec = {
   /** Optional deterministic query. Runtime may fall back to the selected text. */
   query?: string;
   purpose: ResearchPurpose;
   pageSize?: number;
+  /** Inclusive publication year floor from a validated search-query proposal. */
+  sinceYear?: number;
   /** Require at least one abstract-bearing paper before downstream drafting. */
   requireAbstract?: boolean;
 };

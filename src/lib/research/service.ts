@@ -9,6 +9,7 @@ export type TrustedPaperSearchPayload = {
   query?: string;
   count?: number;
   hits: PaperHit[];
+  warnings?: string[];
 };
 
 export type ResearchStageErrorCode =
@@ -70,12 +71,22 @@ export function parseTrustedPaperSearchPayload(
     });
   }
 
+  if (record.warnings !== undefined) {
+    if (
+      !Array.isArray(record.warnings) ||
+      record.warnings.some((warning) => typeof warning !== "string")
+    ) {
+      return { ok: false, message: "paper_search warnings must be a string array" };
+    }
+  }
+
   return {
     ok: true,
     payload: {
       hits,
       ...(typeof record.query === "string" ? { query: record.query } : {}),
       ...(typeof record.count === "number" ? { count: record.count } : {}),
+      ...(Array.isArray(record.warnings) ? { warnings: record.warnings as string[] } : {}),
     },
   };
 }
@@ -97,28 +108,36 @@ function normalizedQuery(value: string | undefined): string | undefined {
   return query;
 }
 
-/** Resolve the query without delegating query ownership to the language model. */
+function publicationYear(value: string | undefined): number | undefined {
+  if (!value) return undefined;
+  const year = Number.parseInt(value, 10);
+  return Number.isInteger(year) ? year : undefined;
+}
+
+/** Resolve the query without sending the raw user instruction to paper_search. */
 export function resolveResearchQuery(args: {
   spec: ResearchSpec;
   userText: string;
   selectedText?: string;
+  formulatedQuery?: string;
 }): string | undefined {
+  const formulated = normalizedQuery(args.formulatedQuery);
   const explicit = normalizedQuery(args.spec.query);
   const selection = normalizedQuery(args.selectedText);
 
   if (args.spec.purpose === "citation") {
-    return selection ?? explicit;
+    return formulated ?? selection ?? explicit;
   }
-  // The router/runtime must own the research query. Never send the full user
-  // instruction (for example, “research HCC and write Methods”) to the
-  // literature connector as a fallback query.
-  return explicit ?? selection;
+  // Never send the full user instruction (for example, “research HCC and write
+  // Methods”) to the literature connector as a fallback query.
+  return formulated ?? explicit ?? selection;
 }
 
 export async function runResearchStage(args: {
   spec: ResearchSpec;
   userText: string;
   selectedText?: string;
+  formulatedQuery?: string;
   ctx: ToolContext;
   runTool: (
     name: string,
@@ -130,6 +149,7 @@ export async function runResearchStage(args: {
     spec: args.spec,
     userText: args.userText,
     ...(args.selectedText !== undefined ? { selectedText: args.selectedText } : {}),
+    ...(args.formulatedQuery !== undefined ? { formulatedQuery: args.formulatedQuery } : {}),
   });
   if (!query) {
     return {
@@ -156,14 +176,22 @@ export async function runResearchStage(args: {
       message: parsed.message,
     };
   }
-  if (parsed.payload.hits.length === 0) {
+  const sinceYear = args.spec.sinceYear;
+  const datedHits = sinceYear == null
+    ? parsed.payload.hits
+    : parsed.payload.hits.filter((hit) => {
+        const year = publicationYear(hit.year);
+        return year == null || year >= sinceYear;
+      });
+  const droppedByYear = parsed.payload.hits.length - datedHits.length;
+  if (datedHits.length === 0) {
     return {
       ok: false,
       code: "NO_RESULTS",
       message: `No literature results were found for “${query}”.`,
     };
   }
-  if (args.spec.requireAbstract && !parsed.payload.hits.some((hit) => Boolean(hit.abstract))) {
+  if (args.spec.requireAbstract && !datedHits.some((hit) => Boolean(hit.abstract))) {
     return {
       ok: false,
       code: "NO_ABSTRACT_EVIDENCE",
@@ -171,11 +199,14 @@ export async function runResearchStage(args: {
     };
   }
 
-  const warnings: string[] = [];
-  const abstractCount = parsed.payload.hits.filter((hit) => Boolean(hit.abstract)).length;
-  if (abstractCount < parsed.payload.hits.length) {
+  const warnings: string[] = [...(parsed.payload.warnings ?? [])];
+  if (droppedByYear > 0) {
+    warnings.push(`${droppedByYear} candidate(s) were older than ${sinceYear}.`);
+  }
+  const abstractCount = datedHits.filter((hit) => Boolean(hit.abstract)).length;
+  if (abstractCount < datedHits.length) {
     warnings.push(
-      `${parsed.payload.hits.length - abstractCount} candidate(s) have title-level metadata only.`,
+      `${datedHits.length - abstractCount} candidate(s) have title-level metadata only.`,
     );
   }
   return {
@@ -183,7 +214,7 @@ export async function runResearchStage(args: {
     bundle: {
       query,
       purpose: args.spec.purpose,
-      hits: parsed.payload.hits,
+      hits: datedHits,
       warnings,
     },
   };

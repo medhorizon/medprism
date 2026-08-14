@@ -14,10 +14,10 @@ MedPrism is a scientific LaTeX writing assistant. Runtime code, not the model, c
 ## Workflow boundaries
 
 - Citation models evaluate trusted candidate IDs only. Runtime code performs search, metadata verification, BibTeX serialization, and file edits.
-- Compile-fix models receive one root diagnostic and nearby source, and propose one minimal replacement.
+- Compile-fix models receive the latest compile log and project LaTeX, and propose a minimal source repair. They must not repair warnings.
 - Review returns an advisory ReviewReport and never a PatchSet. Applying a finding starts a separate writing workflow.
 - Hashes, revisions, IDs, cite keys, and verified bibliography records are never model-generated.
 
 ## Output
 
-Every model step returns the active workflow's versioned JSON envelope. If it cannot produce a safe structured result, it returns an explanation without a file modification.
+Every model step returns the active workflow's versioned JSON envelope: `schemaVersion`, `workflow`, `summary`, `warnings`, and at most one typed payload. A file edit is `patchProposal.operations` (optional `path`). Runtime derives `patchProposal.schemaVersion` and the inner summary from the envelope, then hydrates a PatchSet. Fail-closed safety checks are wrong workflow, model-supplied runtime fields, unsafe paths, and locate/match failure. If the model cannot produce a safe structured result, it returns an explanation without a file modification.

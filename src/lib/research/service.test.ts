@@ -28,6 +28,12 @@ describe("independent research service", () => {
       selectedText: "exact scientific claim",
     })).toBe("exact scientific claim");
     expect(resolveResearchQuery({
+      spec: { purpose: "citation" },
+      userText: "add citation",
+      selectedText: "exact scientific claim",
+      formulatedQuery: "HCC mortality incidence",
+    })).toBe("HCC mortality incidence");
+    expect(resolveResearchQuery({
       spec: { purpose: "writing", query: "HCC" },
       userText: "research and write",
       selectedText: "old paragraph",
@@ -44,6 +50,22 @@ describe("independent research service", () => {
   it("rejects malformed or duplicate search hits", () => {
     expect(parseTrustedPaperSearchPayload({ hits: [{ id: "x", title: "T", authors: "A" }, { id: "x", title: "T2", authors: "B" }] }).ok).toBe(false);
     expect(parseTrustedPaperSearchPayload({ hits: "bad" }).ok).toBe(false);
+    expect(parseTrustedPaperSearchPayload({ hits: [hit], warnings: [1] }).ok).toBe(false);
+  });
+
+  it("keeps source-search warnings on the research bundle", async () => {
+    const result = await runResearchStage({
+      spec: { purpose: "citation" },
+      userText: "add citation",
+      selectedText: "exact scientific claim",
+      ctx: context,
+      runTool: async () => ({
+        ok: true,
+        data: { hits: [hit], warnings: ["openalex: HTTP 401"] },
+      }),
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.bundle.warnings).toEqual(["openalex: HTTP 401"]);
   });
 
   it("executes paper_search once and returns a reusable ResearchBundle", async () => {
@@ -59,6 +81,34 @@ describe("independent research service", () => {
     if (result.ok) {
       expect(result.bundle).toMatchObject({ query: "HCC", purpose: "writing" });
       expect(result.bundle.hits).toHaveLength(1);
+    }
+  });
+
+  it("drops dated hits older than sinceYear and keeps undated records", async () => {
+    const result = await runResearchStage({
+      spec: { purpose: "citation", sinceYear: 2021 },
+      userText: "add citation",
+      selectedText: "exact scientific claim",
+      formulatedQuery: "HCC mortality",
+      ctx: context,
+      runTool: async (_name, toolArgs) => {
+        expect(toolArgs.query).toBe("HCC mortality");
+        return {
+          ok: true,
+          data: {
+            hits: [
+              { ...hit, id: "old", year: "2017" },
+              { ...hit, id: "new", year: "2024" },
+              { ...hit, id: "undated" },
+            ],
+          },
+        };
+      },
+    });
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.bundle.hits.map((row) => row.id)).toEqual(["new", "undated"]);
+      expect(result.bundle.warnings).toContain("1 candidate(s) were older than 2021.");
     }
   });
 

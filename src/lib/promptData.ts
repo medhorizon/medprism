@@ -9,7 +9,12 @@ export function stringifyPromptData(value: unknown): string {
 }
 
 export function taggedPromptData(
-  tag: "workspace_context" | "trusted_tool_results" | "review_context" | "user_request",
+  tag:
+    | "workspace_context"
+    | "trusted_tool_results"
+    | "review_context"
+    | "user_request"
+    | "runtime_rejection",
   attributes: string,
   value: unknown,
 ): string {

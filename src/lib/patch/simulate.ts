@@ -329,12 +329,8 @@ export async function simulatePatchSet(
 ): Promise<SimulatePatchResult> {
   const initialFiles = { ...files };
   const currentRevision = await projectRevision(initialFiles);
-  if (currentRevision !== patchSet.projectRevision) {
-    return failure(
-      "PROJECT_REVISION_MISMATCH",
-      "Project changed since the patch was created",
-    );
-  }
+  // Unrelated files (an image uploaded while the model ran) change the
+  // project revision. Apply is gated by each operation's baseSha256.
 
   for (let index = 0; index < patchSet.operations.length; index += 1) {
     const operation = patchSet.operations[index]!;

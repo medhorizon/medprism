@@ -56,10 +56,20 @@ export type ResolvedInsertPlacement = {
   via: "semantic-target" | "unique-preferred" | "last-resort";
 };
 
+function lastResortPlacement(source: string): ResolvedInsertPlacement | null {
+  for (const pattern of LAST_RESORT_PATTERNS) {
+    const match = source.match(pattern);
+    if (match?.[0] && occurrenceCount(source, match[0]) === 1) {
+      return { op: "insert_before", anchor: match[0], via: "last-resort" };
+    }
+  }
+  return null;
+}
+
 /**
- * Place an insert at the structurally correct position when possible.
- * Order: semantic target (model targetKind or inferred from draft) →
- * unique model-supplied anchor → last-resort back-matter marker.
+ * Place an insert from the model's targetKind or a unique source anchor it copied.
+ * Do not parse the user request. Figure/body inserts without a unique copied
+ * anchor are rejected instead of being guessed onto the bibliography.
  */
 export function resolveInsertPlacement(args: {
   source: string;
@@ -89,17 +99,7 @@ export function resolveInsertPlacement(args: {
     };
   }
 
-  for (const pattern of LAST_RESORT_PATTERNS) {
-    const match = args.source.match(pattern);
-    if (match?.[0] && occurrenceCount(args.source, match[0]) === 1) {
-      return {
-        op: "insert_before",
-        anchor: match[0],
-        via: "last-resort",
-      };
-    }
-  }
-  return null;
+  return kind ? lastResortPlacement(args.source) : null;
 }
 
 /** @deprecated Prefer resolveInsertPlacement; kept for narrow unique-anchor checks. */
@@ -211,9 +211,12 @@ function coerceOperation(item: unknown): Record<string, unknown> | null {
     ) ?? (targetKind ? placeholderLatexForTargetKind(targetKind) : undefined);
 
   if (REPLACE_OP_ALIASES.has(opName)) {
-    const oldText = firstNonEmptyString(op.oldText, op.before, op.from);
-    const newText = firstNonEmptyString(op.newText, op.after, op.to, op.text, op.content);
-    if (oldText === undefined || newText === undefined) return null;
+    const oldText = firstNonEmptyString(op.oldText, op.before, op.from) ?? "";
+    const newText =
+      typeof op.newText === "string"
+        ? op.newText
+        : firstNonEmptyString(op.after, op.to, op.text, op.content);
+    if (newText === undefined) return null;
     const next: Record<string, unknown> = {
       op: "replace_text",
       oldText,
@@ -239,24 +242,18 @@ function coerceOperation(item: unknown): Record<string, unknown> | null {
 }
 
 /**
- * Normalize messy model patch proposals before schema parsing:
- * - aliases like add/create/append → insert_before
- * - content/newText/latex → text
- * - bare LaTeX strings → insert_before
- * - targetKind-only ops → placeholder LaTeX
+ * Normalize operation aliases before schema parsing.
+ * Does not invent schemaVersion or summary; the envelope parser derives those.
  */
 export function softenRawPatchProposal(value: unknown): unknown {
   if (!value || typeof value !== "object" || Array.isArray(value)) return value;
   const raw = value as Record<string, unknown>;
-  if (!Array.isArray(raw.operations)) return value;
+  if (!Array.isArray(raw.operations)) return raw;
 
   const operations = raw.operations
     .map((item) => coerceOperation(item))
     .filter((item): item is Record<string, unknown> => item !== null);
 
-  if (operations.length === 0) return value;
-  return {
-    ...raw,
-    operations,
-  };
+  if (operations.length === 0) return raw;
+  return { ...raw, operations };
 }

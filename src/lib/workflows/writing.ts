@@ -9,6 +9,7 @@ import {
 } from "../context/snapshot";
 import { taggedPromptData } from "../promptData";
 import { compactPaperHits, validateResearchUse } from "../research/service";
+import { isSafetyValidationError } from "../patch/schema";
 import { parseModelWorkflowEnvelope } from "../replyParse";
 import {
   detectWritingDomain,
@@ -54,18 +55,31 @@ export function selectedWritingSkill(input: WorkflowExecutionInput): {
 function invalidModelResult(
   kind: WorkflowKind,
   message: string,
+  safety = false,
+  extraNotes: string[] = [],
 ): WorkflowResult {
+  const prefix = safety
+    ? "模型结果未通过安全验证，未生成可 Keep 的修改"
+    : "模型结果无法应用，未生成可 Keep 的修改";
   return {
     agent: emptyAgentResult(kind, "Structured model result was rejected", [message]),
-    content: `模型结果未通过安全验证，未生成可 Keep 的修改：${message}`,
-    toolNotes: [`model-result-rejected:${message}`],
+    content: `${prefix}：${message}`,
+    toolNotes: [`model-result-rejected:${message}`, ...extraNotes],
   };
+}
+
+function jsonRetryPrompt(error: string): string {
+  return taggedPromptData("runtime_rejection", "", {
+    error,
+    instruction:
+      "The previous result could not be applied. Return one JSON envelope for the same user request. patchProposal.operations may only use replace_text, insert_before, or insert_after. To delete existing source, copy that exact span as oldText and set newText to an empty string. Do not invent other op names, and do not emit patch, patchSet, hashes, or bib_add.",
+  });
 }
 
 export const runWritingWorkflow: WorkflowHandler = async (input) => {
   const kind = input.request.kind;
   if (!WRITING_KINDS.has(kind)) {
-    return invalidModelResult(kind, `Writing handler cannot execute ${kind}`);
+    return invalidModelResult(kind, `Writing handler cannot execute ${kind}`, true);
   }
 
   const snapshot: ContextSnapshot = input.contextPackage;
@@ -109,100 +123,164 @@ export const runWritingWorkflow: WorkflowHandler = async (input) => {
       content: taggedPromptData("user_request", "", { text: input.request.userText }),
     },
   ];
-  const raw = await input.services.complete({ config: input.config, messages });
-  const parsed = parseModelWorkflowEnvelope(raw, kind);
-  if (!parsed.ok) return invalidModelResult(kind, parsed.error.message);
-  if (
-    parsed.envelope.textDraftValue !== undefined ||
-    parsed.envelope.citationPlanValue !== undefined ||
-    parsed.envelope.researchReportValue !== undefined ||
-    parsed.envelope.reviewValue !== undefined
-  ) {
-    return invalidModelResult(
-      kind,
-      `${kind} workflow returned a payload owned by another workflow or requires a runtime target`,
-    );
-  }
 
-  if (input.research && parsed.envelope.proposal) {
-    if (parsed.envelope.researchUseValue === undefined) {
-      return invalidModelResult(
-        kind,
-        "Research-assisted source edits must declare researchUse.sourceCandidateIds",
+  const applyRaw = async (raw: string): Promise<
+    | { status: "ok"; result: WorkflowResult }
+    | { status: "unusable-json"; error: string; safety: boolean }
+  > => {
+    const parsed = parseModelWorkflowEnvelope(raw, kind);
+    if (!parsed.ok) {
+      return {
+        status: "unusable-json",
+        error: parsed.error.message,
+        safety: isSafetyValidationError(parsed.error.code),
+      };
+    }
+    if (
+      parsed.envelope.textDraftValue !== undefined ||
+      parsed.envelope.citationPlanValue !== undefined ||
+      parsed.envelope.researchReportValue !== undefined ||
+      parsed.envelope.reviewValue !== undefined
+    ) {
+      return {
+        status: "unusable-json",
+        error: `${kind} workflow returned a payload owned by another workflow or requires a runtime target`,
+        safety: true,
+      };
+    }
+
+    if (input.research && parsed.envelope.proposal) {
+      if (parsed.envelope.researchUseValue === undefined) {
+        return {
+          status: "ok",
+          result: invalidModelResult(
+            kind,
+            "Research-assisted source edits must declare researchUse.sourceCandidateIds",
+          ),
+        };
+      }
+      const use = validateResearchUse(
+        parsed.envelope.researchUseValue,
+        input.research,
+        true,
       );
+      if (!use.ok) return { status: "ok", result: invalidModelResult(kind, use.message) };
+    } else if (!input.research && parsed.envelope.researchUseValue !== undefined) {
+      return {
+        status: "ok",
+        result: invalidModelResult(
+          kind,
+          "A non-research workflow must not claim trusted research candidates",
+          true,
+        ),
+      };
     }
-    const use = validateResearchUse(
-      parsed.envelope.researchUseValue,
-      input.research,
-      true,
-    );
-    if (!use.ok) return invalidModelResult(kind, use.message);
-  } else if (!input.research && parsed.envelope.researchUseValue !== undefined) {
-    return invalidModelResult(
-      kind,
-      "A non-research workflow must not claim trusted research candidates",
-    );
-  }
 
-  const proposal = parsed.envelope.proposal;
-  if (!proposal) {
+    const proposal = parsed.envelope.proposal;
+    if (!proposal) {
+      return {
+        status: "ok",
+        result: {
+          agent: emptyAgentResult(kind, parsed.envelope.summary, [
+            ...parsed.envelope.warnings,
+            ...(input.research?.warnings ?? []),
+          ]),
+          content: parsed.envelope.content || parsed.envelope.summary,
+          toolNotes: [
+            `workflow:${kind}:no-patch`,
+            `skill:${skill.id}`,
+            ...(input.research
+              ? [`research:${input.research.query}:${input.research.hits.length}`]
+              : []),
+          ],
+        },
+      };
+    }
+
+    if (kind === "polish" && snapshot.selection && snapshot.selectedText !== undefined) {
+      const replacement = proposal.operations.length === 1 && proposal.operations[0]?.op === "replace_text"
+        ? proposal.operations[0].newText
+        : undefined;
+      if (replacement === undefined) {
+        return {
+          status: "ok",
+          result: invalidModelResult(
+            kind,
+            "A selection-scoped polish must return one replace_text operation",
+            true,
+          ),
+        };
+      }
+      const protectedResult = validateProtectedTextReplacement(snapshot.selectedText, replacement);
+      if (!protectedResult.ok) {
+        return { status: "ok", result: invalidModelResult(kind, protectedResult.message) };
+      }
+    }
+
+    const allowedPaths = snapshot.selection
+      ? [snapshot.activeFile]
+      : [...new Set([
+          snapshot.activeFile,
+          ...(snapshot.mainFile ? [snapshot.mainFile] : []),
+        ])];
+    const finalized = await finalizeModelPatchProposal({
+      snapshot,
+      proposal,
+      strictSelection: Boolean(snapshot.selection),
+      allowedPaths,
+      forceCompileVerification: true,
+    });
+    if (!finalized.ok) {
+      return {
+        status: "ok",
+        result: invalidModelResult(
+          kind,
+          finalized.error.message,
+          isSafetyValidationError(finalized.error.code),
+        ),
+      };
+    }
+
     return {
-      agent: emptyAgentResult(kind, parsed.envelope.summary, [
-        ...parsed.envelope.warnings,
-        ...(input.research?.warnings ?? []),
-      ]),
-      content: parsed.envelope.content || parsed.envelope.summary,
-      toolNotes: [
-        `workflow:${kind}:no-patch`,
-        `skill:${skill.id}`,
-        ...(input.research
-          ? [`research:${input.research.query}:${input.research.hits.length}`]
-          : []),
-      ],
+      status: "ok",
+      result: {
+        agent: {
+          schemaVersion: "1",
+          workflow: kind,
+          summary: parsed.envelope.summary,
+          warnings: [...parsed.envelope.warnings, ...(input.research?.warnings ?? [])],
+          patch: finalized.patchSet,
+        },
+        content: parsed.envelope.content || parsed.envelope.summary,
+        toolNotes: [
+          `workflow:${kind}`,
+          `skill:${skill.id}`,
+          ...(input.research
+            ? [`research:${input.research.query}:${input.research.hits.length}`]
+            : []),
+        ],
+      },
     };
-  }
+  };
 
-  if (kind === "polish" && snapshot.selection && snapshot.selectedText !== undefined) {
-    const replacement = proposal.operations.length === 1 && proposal.operations[0]?.op === "replace_text"
-      ? proposal.operations[0].newText
-      : undefined;
-    if (replacement === undefined) {
-      return invalidModelResult(kind, "A selection-scoped polish must return one replace_text operation");
-    }
-    const protectedResult = validateProtectedTextReplacement(snapshot.selectedText, replacement);
-    if (!protectedResult.ok) return invalidModelResult(kind, protectedResult.message);
-  }
+  const raw = await input.services.complete({ config: input.config, messages });
+  const first = await applyRaw(raw);
+  if (first.status === "ok") return first.result;
 
-  const allowedPaths = snapshot.selection
-    ? [snapshot.activeFile]
-    : [...new Set([
-        snapshot.activeFile,
-        ...(snapshot.mainFile ? [snapshot.mainFile] : []),
-      ])];
-  const finalized = await finalizeModelPatchProposal({
-    snapshot,
-    proposal,
-    strictSelection: Boolean(snapshot.selection),
-    allowedPaths,
-    forceCompileVerification: true,
-  });
-  if (!finalized.ok) return invalidModelResult(kind, finalized.error.message);
-
-  return {
-    agent: {
-      schemaVersion: "1",
-      workflow: kind,
-      summary: parsed.envelope.summary,
-      warnings: [...parsed.envelope.warnings, ...(input.research?.warnings ?? [])],
-      patch: finalized.patchSet,
-    },
-    content: parsed.envelope.content || parsed.envelope.summary,
-    toolNotes: [
-      `workflow:${kind}`,
-      `skill:${skill.id}`,
-      ...(input.research
-        ? [`research:${input.research.query}:${input.research.hits.length}`]
-        : []),
+  const retriedRaw = await input.services.complete({
+    config: input.config,
+    messages: [
+      ...messages,
+      { role: "assistant", content: raw },
+      { role: "user", content: jsonRetryPrompt(first.error) },
     ],
+  });
+  const second = await applyRaw(retriedRaw);
+  if (second.status === "unusable-json") {
+    return invalidModelResult(kind, second.error, second.safety, ["model-result-retried"]);
+  }
+  return {
+    ...second.result,
+    toolNotes: [...second.result.toolNotes, "model-result-retried"],
   };
 };

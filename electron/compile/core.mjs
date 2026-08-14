@@ -169,7 +169,13 @@ function appendLog(state, chunk) {
 }
 
 export function bibliographyFailure(log) {
-  if (/errors were issued by (?:BibTeX|Biber), but were ignored/i.test(log)) return true;
+  const noCitationCommands = /I found no \\citation commands/i.test(log);
+  const missingEntry = /I didn't find a database entry/i.test(log);
+  if (/errors were issued by (?:BibTeX|Biber), but were ignored/i.test(log)) {
+    // Drafts with \\bibliography but no \\cite make BibTeX emit an error; Tectonic still writes a PDF.
+    if (noCitationCommands && !missingEntry) return false;
+    return true;
+  }
   const finalPassStart = Math.max(
     log.lastIndexOf("note: Rerunning TeX"),
     log.lastIndexOf("note: Running TeX"),

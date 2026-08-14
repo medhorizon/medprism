@@ -29,6 +29,19 @@ describe("semantic insert placement", () => {
     ).toBe("conflict-of-interest");
     expect(inferLatexTargetKindFromDraft("\\section*{Funding}\n\n")).toBe("funding");
     expect(inferLatexTargetKindFromDraft("\\section{Discussion}\n\n")).toBe("discussion");
+    expect(
+      inferLatexTargetKindFromDraft(
+        "\\begin{figure}\\includegraphics{figures/result.png}\\end{figure}\n",
+      ),
+    ).toBeNull();
+  });
+
+  it("does not guess a bibliography slot for an unanchored figure", () => {
+    const placement = resolveInsertPlacement({
+      source: SPRINGER_LIKE,
+      text: "\\begin{figure}\\includegraphics{figures/result.png}\\end{figure}\n",
+    });
+    expect(placement).toBeNull();
   });
 
   it("places discussion before bibliography, not at end{document}", () => {

@@ -1,34 +1,35 @@
 ---
 name: fix-compile-errors
-description: Diagnose one runtime-supplied root LaTeX compilation error and identify the smallest source correction. Use only for compile-fix workflows with a root diagnostic and nearby source.
+description: Diagnose LaTeX compile failures from the supplied compile log and project source, and identify the smallest source correction. Use only for compile-fix workflows. Do not repair warnings.
 ---
 
 # Fix Compile Errors
 
 ## Scope
 
-Reason from the supplied root compiler diagnostic and nearby LaTeX source.
-Address one root error at a time.
+Reason from the supplied compile log and project LaTeX. Address the source
+error that prevents a clean compile.
 
 ## Professional Judgement
 
-- Identify the earliest source-level cause supported by the diagnostic.
+- Identify the earliest source-level cause supported by the log.
 - Prefer one local correction over restructuring surrounding content.
 - Account for command arguments, environment balance, package availability,
-  escaping, math mode, and file references when the evidence points there.
-- Avoid speculative repairs to secondary warnings.
+  escaping, math mode, citations, and file references when the evidence
+  points there.
+- Do not repair Overfull/Underfull boxes or other warnings.
 
 ## Preserve
 
 Preserve scientific prose, numbers, equations, citations, labels, and project
-structure unless the root syntax error directly requires a narrow change.
+structure unless the compile error directly requires a narrow change.
 
 ## Boundaries
 
-Do not inspect unrelated files, repair unrelated diagnostics, rewrite prose,
-or assume a package or resource exists when it was not supplied.
+Do not invent bibliography records, DOI, PMID, or cite keys. Do not rewrite
+prose. Do not assume a package or resource exists when it was not supplied.
 
 ## Insufficient Evidence
 
-When the diagnostic and source window do not identify a unique safe repair,
-state what additional source or log context is required.
+When the log and source do not identify a unique safe repair, omit the patch
+and state what additional source or log context is required.

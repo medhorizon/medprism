@@ -7,6 +7,7 @@ import {
   fileBytesForExport,
   filesForCompile,
   isBinaryFileContent,
+  onlyBinaryAttachmentChanges,
   withCompiledPdfFiles,
 } from "./projectBinary";
 
@@ -36,8 +37,9 @@ describe("projectBinary", () => {
     });
   });
 
-  it("keeps uploaded binary images and non-generated PDFs for compilation", () => {
+  it("keeps only graphics that the TeX source cites", () => {
     const image = encodeBinaryBase64("iVBORw0KGgo=");
+    const unused = encodeBinaryBase64("unused");
     const figurePdf = encodeBinaryBase64("JVBERi0x");
     expect(
       filesForCompile(
@@ -45,6 +47,7 @@ describe("projectBinary", () => {
           "main.tex": "\\includegraphics{figures/result.png}",
           "main.pdf": encodeBinaryBase64("JVBERi0x"),
           "figures/result.png": image,
+          "figures/unused.png": unused,
           "figures/supplement.pdf": figurePdf,
         },
         "main.tex",
@@ -52,8 +55,17 @@ describe("projectBinary", () => {
     ).toEqual({
       "main.tex": "\\includegraphics{figures/result.png}",
       "figures/result.png": image,
-      "figures/supplement.pdf": figurePdf,
     });
+  });
+
+  it("treats an added unused image as an attachment-only change", () => {
+    const image = encodeBinaryBase64("iVBORw0KGgo=");
+    const before = { "sn-article.tex": "\\section{Introduction}" };
+    const after = { ...before, "figures/scan.png": image };
+    expect(onlyBinaryAttachmentChanges(before, after)).toBe(true);
+    expect(
+      onlyBinaryAttachmentChanges(before, { "sn-article.tex": "\\section{Changed}" }),
+    ).toBe(false);
   });
 
   it("exports binary files as raw bytes", () => {

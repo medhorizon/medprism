@@ -5,6 +5,7 @@ import {
   type ModelPatchProposal,
   type PatchSet,
   type PatchValidationError,
+  type PatchValidationErrorCode,
 } from "./patch/schema";
 import type { ChatSuggestion } from "../types/chat";
 import type { WorkflowKind } from "./workflows/types";
@@ -74,10 +75,14 @@ export function extractJsonValue(raw: string): unknown {
     : new Error("Model response did not contain valid JSON");
 }
 
-function invalidWorkflowResult(message: string, raw: string): ParseWorkflowEnvelopeResult {
+function invalidWorkflowResult(
+  message: string,
+  raw: string,
+  code: PatchValidationErrorCode = "INVALID_PATCH",
+): ParseWorkflowEnvelopeResult {
   return {
     ok: false,
-    error: { code: "INVALID_PATCH", message },
+    error: { code, message },
     rawContent: raw.trim(),
   };
 }
@@ -133,6 +138,7 @@ export function parseModelWorkflowEnvelope(
     return invalidWorkflowResult(
       `Expected workflow ${expectedWorkflow}, received ${String(record.workflow ?? "<missing>")}`,
       raw,
+      "WRONG_WORKFLOW",
     );
   }
   if (typeof record.summary !== "string" || !record.summary.trim()) {
@@ -146,6 +152,7 @@ export function parseModelWorkflowEnvelope(
     return invalidWorkflowResult(
       "The model must not return a hydrated patch or PatchSet; runtime metadata is trusted code only",
       raw,
+      "RUNTIME_OWNED_FIELD",
     );
   }
   if (hasPayload(record.textDraft) && hasPayload(record.writingDraft)) {
@@ -172,7 +179,9 @@ export function parseModelWorkflowEnvelope(
 
   let proposal: ModelPatchProposal | undefined;
   if (hasPayload(patchProposalValue)) {
-    const parsed = parseModelPatchProposal(softenRawPatchProposal(patchProposalValue));
+    const parsed = parseModelPatchProposal(softenRawPatchProposal(patchProposalValue), {
+      summary: record.summary.trim(),
+    });
     if (!parsed.ok) {
       return { ok: false, error: parsed.error, rawContent: raw.trim() };
     }
@@ -219,7 +228,9 @@ export function parseProposalEnvelope(raw: string): ProposalEnvelope {
 
     const patchProposalValue = effectivePatchProposal(envelope.patchProposal);
     if (hasPayload(patchProposalValue)) {
-      const proposal = parseModelPatchProposal(softenRawPatchProposal(patchProposalValue));
+      const proposal = parseModelPatchProposal(softenRawPatchProposal(patchProposalValue), {
+        summary: typeof envelope.summary === "string" ? envelope.summary.trim() : "",
+      });
       if (!proposal.ok) return { content, error: proposal.error };
       return { content, proposal: proposal.proposal };
     }

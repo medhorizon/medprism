@@ -12,8 +12,6 @@ Return one JSON object:
   "warnings": [],
   "content": "short explanation for the user",
   "patchProposal": {
-    "schemaVersion": "1",
-    "summary": "short edit label",
     "operations": [
       {
         "op": "replace_text",
@@ -25,7 +23,9 @@ Return one JSON object:
 }
 ```
 
-`patchProposal` is optional when no safe edit can be located. Omit the field entirely in that case; do not return `patchProposal: null` or `operations: []`. Determine the requested destination from the user request and supplied project context. Distinguish source context from the edit destination (for example, "write an introduction based on the title" edits the introduction, not the title).
+`patchProposal` is optional when no safe edit can be located. Omit the field entirely in that case; do not return `patchProposal: null` or `operations: []`. Return only `operations` (optional `path`). Do not emit `patchProposal.schemaVersion` or an inner `summary`; the runtime copies those from this envelope.
+
+Judge the edit location and replacement from the supplied LaTeX (`mainDocument`, `texDocuments`, file tree, and `editor.selectedText` when present), the conversation, and this instruction. `oldText` and insert `anchor` must be copied verbatim from that source. Do not use PDF-visible wording, rendered labels, or a paraphrase from the user message as the locate key. Empty `newText` deletes the copied source span. Distinguish source context from the edit destination (for example, "write an introduction based on the title" edits the introduction, not the title). Uploaded images are project files for later `\\includegraphics`; they are not a locate key and do not change insert position.
 
 For new structural blocks / blank modules, return **only** `insert_before` operations (never `add`, `create`, `append`, `update`, or `bib_add`):
 

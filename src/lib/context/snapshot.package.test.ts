@@ -12,6 +12,7 @@ describe("unified context package", () => {
       projectId: "p",
       files: {
         "main.tex": "\\begin{document}\nText\n\\end{document}",
+        "sections/intro.tex": "\\section{Introduction}\nVisible only in texDocuments.",
         "refs.bib": "@article{verified, title={Verified}}",
         "figures/result.png": `${BINARY_FILE_PREFIX}c2VjcmV0LWJ5dGVz`,
         "journal.cls": "\\NeedsTeXFormat{LaTeX2e}",
@@ -43,6 +44,8 @@ describe("unified context package", () => {
     expect(packageValue.conversation.confirmedImagePaths).toEqual(["figures/result.png"]);
     const prompt = formatContextPackage(packageValue);
     expect(prompt).toContain("Insert the confirmed result figure");
+    expect(prompt).toContain("texDocuments");
+    expect(prompt).toContain("Visible only in texDocuments.");
     expect(prompt).toContain("figures/result.png");
     expect(prompt).toContain("journal.cls");
     expect(prompt).not.toContain("c2VjcmV0LWJ5dGVz");

@@ -65,4 +65,34 @@ describe("context snapshot", () => {
     );
     expect(escaped.ok).toBe(false);
   });
+
+  it("uses the selected span as oldText even when the model echoes a different string", async () => {
+    const source = "keep\nContributing authors: iauthor@gmail.com;\nkeep";
+    const selected = "Contributing authors: iauthor@gmail.com;\n";
+    const snapshot = await buildContextSnapshot({
+      projectId: "p",
+      files: { "main.tex": source },
+      activeFile: "main.tex",
+      selection: {
+        start: source.indexOf(selected),
+        end: source.indexOf(selected) + selected.length,
+      },
+    });
+    const hydrated = await hydratePatchProposal(
+      {
+        schemaVersion: "1",
+        summary: "Remove leftover template authors",
+        operations: [{ op: "replace_text", oldText: "iauthor@gmail.com", newText: "" }],
+      },
+      snapshot,
+      { strictSelection: true },
+    );
+    expect(hydrated.ok).toBe(true);
+    if (!hydrated.ok) return;
+    expect(hydrated.patchSet.operations[0]).toMatchObject({
+      oldText: selected,
+      newText: "",
+      range: snapshot.selection,
+    });
+  });
 });

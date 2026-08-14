@@ -13,6 +13,7 @@ function context(args: {
   mainFile?: string;
   selection?: { start: number; end: number };
   extraFiles?: Record<string, string>;
+  lastCompileLog?: string;
 } = {}): ToolContext {
   const activeFile = args.activeFile ?? "main.tex";
   const source = args.source ?? "Original sentence.";
@@ -25,6 +26,7 @@ function context(args: {
     activeFile,
     mainFile: args.mainFile ?? activeFile,
     ...(args.selection ? { selection: args.selection } : {}),
+    ...(args.lastCompileLog ? { lastCompileLog: args.lastCompileLog } : {}),
   };
 }
 
@@ -92,6 +94,11 @@ const trustedHit = {
   abstract: "Abstract-level evidence about hepatocellular carcinoma.",
   doi: "10.1000/trusted",
 };
+
+const formulatedQueryResponse = JSON.stringify({
+  query: "hepatocellular carcinoma mortality",
+  sinceYear: 2021,
+});
 
 describe("workflow executor", () => {
   it("registers eight deterministic workflows, including advice and research", () => {
@@ -402,7 +409,7 @@ describe("workflow executor", () => {
       ctx,
     }, services({
       toolResult: { ok: true, data: { hits: [trustedHit] } },
-      modelResponses: [JSON.stringify({
+      modelResponses: [formulatedQueryResponse, JSON.stringify({
         schemaVersion: "1",
         workflow: "citation",
         summary: "Choose evidence",
@@ -420,13 +427,56 @@ describe("workflow executor", () => {
       onModel: () => events.push("model"),
     }));
 
-    expect(events).toEqual(["research", "model"]);
+    expect(events).toEqual(["model", "research", "model"]);
+    expect(result.toolNotes).toContain("research-query:llm");
     expect(result.agent.patch?.operations).toHaveLength(2);
     expect(result.agent.patch?.operations.map((operation) => operation.op).sort()).toEqual([
       "bib_add",
       "replace_text",
     ]);
     expect(result.agent.patch?.verify?.compile).toBe(true);
+  });
+
+  it("searches with the LLM keyword query instead of the selected claim sentence", async () => {
+    const claim = "Hepatocellular carcinoma (HCC) is a major cause of cancer-related morbidity and mortality worldwide.";
+    const ctx = context({
+      source: `${claim}\n\\bibliography{references}\n\\end{document}`,
+      selection: { start: 0, end: claim.length },
+    });
+    const svc = services({
+      toolResult: { ok: true, data: { hits: [trustedHit] } },
+      modelResponses: [formulatedQueryResponse, JSON.stringify({
+        schemaVersion: "1",
+        workflow: "citation",
+        summary: "Choose evidence",
+        warnings: [],
+        citationPlan: {
+          candidates: [{
+            candidateId: trustedHit.id,
+            relation: "supports",
+            selected: true,
+            reason: "The abstract is relevant.",
+          }],
+        },
+      })],
+    });
+    await executeWorkflow({
+      request: requestFor("为introduction添加引用，要求近5年，至少5篇", {
+        kind: "citation",
+        selectedText: claim,
+        selection: { start: 0, end: claim.length },
+      }),
+      config,
+      history: [],
+      ctx,
+    }, svc);
+
+    expect(svc.complete).toHaveBeenNthCalledWith(1, expect.objectContaining({ stream: false }));
+    expect(svc.runTool).toHaveBeenCalledWith(
+      "paper_search",
+      expect.objectContaining({ query: "hepatocellular carcinoma mortality" }),
+      expect.anything(),
+    );
   });
 
   it("locates a Discussion claim via LLM when citation has no selection", async () => {
@@ -455,6 +505,7 @@ describe("workflow executor", () => {
           path: "main.tex",
           reason: "Unsupported claim",
         }),
+        formulatedQueryResponse,
         JSON.stringify({
           schemaVersion: "1",
           workflow: "citation",
@@ -474,8 +525,9 @@ describe("workflow executor", () => {
       onModel: () => events.push("model"),
     }));
 
-    expect(events).toEqual(["model", "research", "model"]);
+    expect(events).toEqual(["model", "model", "research", "model"]);
     expect(result.toolNotes.some((note) => note.startsWith("citation-claim:llm:"))).toBe(true);
+    expect(result.toolNotes).toContain("research-query:llm");
     expect(result.agent.patch?.operations.some((operation) => operation.op === "replace_text")).toBe(
       true,
     );
@@ -508,9 +560,115 @@ describe("workflow executor", () => {
       config,
       history: [],
       ctx: context(),
-    }, services({ modelResponses: ["not json"] }));
+    }, services({ modelResponses: ["not json", "still not json"] }));
     expect(result.agent.patch).toBeUndefined();
     expect(result.agent.warnings.length).toBeGreaterThan(0);
+    expect(result.toolNotes).toContain("model-result-retried");
+  });
+
+  it("retries once when the first writing JSON uses an illegal op", async () => {
+    const figure = "\\includegraphics{extra.png}";
+    const source = `${figure}\n\\end{document}\n`;
+    const svc = services({
+      modelResponses: [
+        JSON.stringify({
+          schemaVersion: "1",
+          workflow: "writing",
+          summary: "Delete extra figure",
+          warnings: [],
+          content: "Removing the trailing figure.",
+          patchProposal: {
+            operations: [{ op: "delete", oldText: figure }],
+          },
+        }),
+        JSON.stringify({
+          schemaVersion: "1",
+          workflow: "writing",
+          summary: "Delete extra figure",
+          warnings: [],
+          content: "Removing the trailing figure.",
+          patchProposal: {
+            operations: [{
+              op: "replace_text",
+              oldText: figure,
+              newText: "",
+            }],
+          },
+        }),
+      ],
+    });
+    const result = await executeWorkflow({
+      request: requestFor("删除文末多余的图片", { activeFile: "main.tex", mainFile: "main.tex" }),
+      config,
+      history: [],
+      ctx: context({ source }),
+    }, svc);
+
+    expect(svc.complete).toHaveBeenCalledTimes(2);
+    const retryMessages = vi.mocked(svc.complete).mock.calls[1]![0].messages;
+    expect(retryMessages.at(-2)).toMatchObject({ role: "assistant" });
+    expect(retryMessages.at(-1)?.content).toContain("<runtime_rejection>");
+    expect(retryMessages.at(-1)?.content).toContain("replace_text/insert");
+    expect(result.toolNotes).toContain("model-result-retried");
+    expect(result.agent.patch?.operations[0]).toMatchObject({
+      op: "replace_text",
+      oldText: figure,
+      newText: "",
+    });
+  });
+
+  it("retries once when the first citation JSON omits citationPlan", async () => {
+    const claim = "This claim needs evidence.";
+    const ctx = context({
+      source: `${claim}\n\\bibliography{references}\n\\end{document}`,
+      selection: { start: 0, end: claim.length },
+    });
+    const svc = services({
+      toolResult: { ok: true, data: { hits: [trustedHit] } },
+      modelResponses: [
+        formulatedQueryResponse,
+        JSON.stringify({
+          schemaVersion: "1",
+          workflow: "citation",
+          summary: "Choose evidence",
+          warnings: [],
+          content: "Missing plan.",
+        }),
+        JSON.stringify({
+          schemaVersion: "1",
+          workflow: "citation",
+          summary: "Choose evidence",
+          warnings: [],
+          citationPlan: {
+            candidates: [{
+              candidateId: trustedHit.id,
+              relation: "supports",
+              selected: true,
+              reason: "The abstract is relevant.",
+            }],
+          },
+        }),
+      ],
+    });
+    const result = await executeWorkflow({
+      request: requestFor("给这句话补引用", {
+        selectedText: claim,
+        selection: { start: 0, end: claim.length },
+      }),
+      config,
+      history: [],
+      ctx,
+    }, svc);
+
+    expect(svc.complete).toHaveBeenCalledTimes(3);
+    const retryMessages = vi.mocked(svc.complete).mock.calls[2]![0].messages;
+    expect(retryMessages.at(-2)).toMatchObject({ role: "assistant" });
+    expect(retryMessages.at(-1)?.content).toContain("<runtime_rejection>");
+    expect(retryMessages.at(-1)?.content).toContain("citationPlan");
+    expect(result.toolNotes).toContain("model-result-retried");
+    expect(result.agent.patch?.operations.some((operation) => operation.op === "replace_text")).toBe(
+      true,
+    );
   });
 
   it("citation rejects identifiers generated outside trusted search results", async () => {
@@ -529,7 +687,7 @@ describe("workflow executor", () => {
       ctx,
     }, services({
       toolResult: { ok: true, data: { hits: [trustedHit] } },
-      modelResponses: [JSON.stringify({
+      modelResponses: [formulatedQueryResponse, JSON.stringify({
         schemaVersion: "1",
         workflow: "citation",
         summary: "Choose evidence",
@@ -549,44 +707,59 @@ describe("workflow executor", () => {
     expect(result.agent.warnings.join(" ")).toMatch(/must not generate doi/i);
   });
 
-  it("compile-fix binds the proposal to the diagnosed path", async () => {
+  it("compile-fix sends the log and LaTeX to the model instead of requiring a parsed file:line", async () => {
     const ctx = context({
       source: "line1\n\\badcommand\nline3",
       activeFile: "sections/methods.tex",
       extraFiles: { "main.tex": "Main text" },
+      lastCompileLog: "! Undefined control sequence\nl.2 \\badcommand",
     });
-    const result = await executeWorkflow({
-      request: requestFor("修复这个 LaTeX 编译错误"),
-      config,
-      history: [],
-      ctx,
-    }, services({
-      toolResult: {
-        ok: true,
-        data: {
-          compileOk: false,
-          log: "sections/methods.tex:2: Undefined control sequence",
-        },
-      },
+    const svc = services({
       modelResponses: [JSON.stringify({
         schemaVersion: "1",
         workflow: "compile-fix",
         summary: "Fix command",
         warnings: [],
         patchProposal: {
-          schemaVersion: "1",
-          summary: "Wrong target",
           operations: [{
             op: "replace_text",
-            path: "main.tex",
-            oldText: "Main text",
-            newText: "Changed",
+            path: "sections/methods.tex",
+            oldText: "\\badcommand",
+            newText: "text",
           }],
         },
       })],
-    }));
+    });
+    const result = await executeWorkflow({
+      request: requestFor("诊断编译警告", { kind: "compile-fix" }),
+      config,
+      history: [],
+      ctx,
+    }, svc);
+
+    expect(svc.runTool).not.toHaveBeenCalled();
+    const firstCall = vi.mocked(svc.complete).mock.calls[0]![0];
+    expect(firstCall.messages.some((message) => message.content.includes("\\badcommand"))).toBe(true);
+    expect(firstCall.messages.some((message) => /source="compile"/.test(message.content))).toBe(true);
+    expect(result.agent.patch?.operations[0]).toMatchObject({
+      op: "replace_text",
+      path: "sections/methods.tex",
+      oldText: "\\badcommand",
+      newText: "text",
+    });
+  });
+
+  it("compile-fix does not ask the model to repair warning-only logs", async () => {
+    const svc = services({ modelResponses: [] });
+    const result = await executeWorkflow({
+      request: requestFor("诊断编译警告", { kind: "compile-fix" }),
+      config,
+      history: [],
+      ctx: context({ lastCompileLog: "Overfull \\hbox (12.0pt too wide)" }),
+    }, svc);
+    expect(svc.complete).not.toHaveBeenCalled();
     expect(result.agent.patch).toBeUndefined();
-    expect(result.agent.warnings.join(" ")).toMatch(/diagnosed file/i);
+    expect(result.content).toMatch(/警告/);
   });
 
   it("review returns a typed advisory report and never a patch", async () => {

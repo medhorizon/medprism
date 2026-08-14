@@ -10,13 +10,14 @@ describe("assistant reply parsing", () => {
   it("accepts a model patch proposal without runtime hashes", () => {
     const parsed = parseProposalEnvelope(JSON.stringify({
       content: "Polished the selected paragraph.",
+      summary: "Polish selection",
       patchProposal: {
-        schemaVersion: "1",
-        summary: "Polish selection",
         operations: [{ op: "replace_text", oldText: "old", newText: "new" }],
       },
     }));
     expect(parsed.proposal?.operations[0]?.op).toBe("replace_text");
+    expect(parsed.proposal?.schemaVersion).toBe("1");
+    expect(parsed.proposal?.summary).toBe("Polish selection");
     expect(parsed.patchSet).toBeUndefined();
   });
 
@@ -58,6 +59,7 @@ describe("assistant reply parsing", () => {
       patch: { schemaVersion: "1" },
     }), "writing");
     expect(hydrated.ok).toBe(false);
+    if (!hydrated.ok) expect(hydrated.error.code).toBe("RUNTIME_OWNED_FIELD");
 
     const mismatch = parseModelWorkflowEnvelope(JSON.stringify({
       schemaVersion: "1",
@@ -67,6 +69,7 @@ describe("assistant reply parsing", () => {
       review: { findings: [] },
     }), "writing");
     expect(mismatch.ok).toBe(false);
+    if (!mismatch.ok) expect(mismatch.error.code).toBe("WRONG_WORKFLOW");
   });
 
   it("rejects multiple typed payloads instead of guessing which one to keep", () => {
@@ -99,6 +102,7 @@ describe("assistant reply parsing", () => {
       },
     }), "writing");
     expect(withHash.ok).toBe(false);
+    if (!withHash.ok) expect(withHash.error.code).toBe("RUNTIME_OWNED_FIELD");
 
     const withCompilePolicy = parseModelWorkflowEnvelope(JSON.stringify({
       schemaVersion: "1",
@@ -113,6 +117,7 @@ describe("assistant reply parsing", () => {
       },
     }), "writing");
     expect(withCompilePolicy.ok).toBe(false);
+    if (!withCompilePolicy.ok) expect(withCompilePolicy.error.code).toBe("RUNTIME_OWNED_FIELD");
   });
 
   it("treats empty patchProposal.operations as advice-only instead of rejecting", () => {
@@ -206,20 +211,82 @@ describe("assistant reply parsing", () => {
     expect(parsed.envelope.proposal?.schemaVersion).toBe("1");
   });
 
-  it("still rejects missing and unknown patchProposal schema versions", () => {
-    for (const schemaVersion of [undefined, "2", 2]) {
-      const patchProposal = {
-        summary: "Invalid version",
-        operations: [{ op: "replace_text", oldText: "old", newText: "new" }],
-        ...(schemaVersion === undefined ? {} : { schemaVersion }),
-      };
+  it("accepts replace_text that omits oldText", () => {
+    const parsed = parseModelWorkflowEnvelope(
+      JSON.stringify({
+        schemaVersion: "1",
+        workflow: "writing",
+        summary: "Remove leftover template authors",
+        warnings: [],
+        patchProposal: {
+          operations: [{ op: "replace_text", newText: "" }],
+        },
+      }),
+      "writing",
+    );
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.envelope.proposal?.operations[0]).toMatchObject({
+      op: "replace_text",
+      oldText: "",
+      newText: "",
+    });
+  });
+
+  it("derives patchProposal.schemaVersion and summary from the envelope", () => {
+    const parsed = parseModelWorkflowEnvelope(
+      JSON.stringify({
+        schemaVersion: "1",
+        workflow: "writing",
+        summary: "Set authors to Yan Liu, Yishen Li, and Jianpeng Wei",
+        warnings: [],
+        patchProposal: {
+          operations: [{ op: "replace_text", oldText: "Author", newText: "Yan Liu" }],
+        },
+      }),
+      "writing",
+    );
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.envelope.proposal?.schemaVersion).toBe("1");
+    expect(parsed.envelope.proposal?.summary).toBe(
+      "Set authors to Yan Liu, Yishen Li, and Jianpeng Wei",
+    );
+  });
+
+  it("ignores an inner patchProposal.summary in favor of the envelope", () => {
+    const parsed = parseModelWorkflowEnvelope(
+      JSON.stringify({
+        schemaVersion: "1",
+        workflow: "writing",
+        summary: "Fill authors",
+        warnings: [],
+        patchProposal: {
+          summary: "Set author names",
+          operations: [{ op: "replace_text", oldText: "Author", newText: "Yan Liu" }],
+        },
+      }),
+      "writing",
+    );
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.envelope.proposal?.schemaVersion).toBe("1");
+    expect(parsed.envelope.proposal?.summary).toBe("Fill authors");
+  });
+
+  it("still rejects unknown patchProposal schema versions", () => {
+    for (const schemaVersion of ["2", 2]) {
       const parsed = parseModelWorkflowEnvelope(
         JSON.stringify({
           schemaVersion: "1",
           workflow: "writing",
           summary: "Invalid version",
           warnings: [],
-          patchProposal,
+          patchProposal: {
+            schemaVersion,
+            summary: "Invalid version",
+            operations: [{ op: "replace_text", oldText: "old", newText: "new" }],
+          },
         }),
         "writing",
       );

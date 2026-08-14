@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { firstRootCompileError, parseCompileLog } from "./parseCompileLog";
+import { firstRootCompileError, parseCompileLog, compileLogNeedsSourceFix } from "./parseCompileLog";
 
 describe("compile log parser", () => {
   it("selects the first error without promoting an earlier warning", () => {
@@ -35,5 +35,15 @@ describe("compile log parser", () => {
   it("does not invent a path when the log does not identify one", () => {
     const root = firstRootCompileError("! Undefined control sequence\nl.4 \\bad");
     expect(root?.file).toBeUndefined();
+  });
+
+  it("treats unresolved citations as a source fix and overfull warnings as not", () => {
+    expect(compileLogNeedsSourceFix("Overfull \\hbox (12.0pt too wide)")).toBe(false);
+    expect(
+      compileLogNeedsSourceFix("Package natbib Warning: There were undefined citations."),
+    ).toBe(true);
+    expect(
+      compileLogNeedsSourceFix("sections/methods.tex:12: Undefined control sequence"),
+    ).toBe(true);
   });
 });

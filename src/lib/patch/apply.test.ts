@@ -166,6 +166,29 @@ describe("typed patch simulation", () => {
     if (undone.ok) expect(Object.hasOwn(undone.files, "references.bib")).toBe(false);
   });
 
+  it("keeps a text patch when only an unrelated image was added", async () => {
+    const source = { "sn-article.tex": TEX };
+    const patch = await patchFor(source, [
+      {
+        op: "replace_text",
+        path: "sn-article.tex",
+        baseSha256: await sha256Hex(TEX),
+        oldText: "Old paragraph.",
+        newText: "New paragraph.",
+        expectedOccurrences: 1,
+      },
+    ]);
+    const withImage = {
+      ...source,
+      "figures/scan.png": "medprism-binary/v1;base64,c2Nhbg==",
+    };
+    const result = await simulatePatchSet(withImage, patch);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.simulation.nextFiles["sn-article.tex"]).toContain("New paragraph.");
+    expect(result.simulation.nextFiles["figures/scan.png"]).toBe(withImage["figures/scan.png"]);
+  });
+
   it("fails all operations atomically when a later operation is invalid", async () => {
     const files = { "main.tex": TEX };
     const hash = await sha256Hex(TEX);

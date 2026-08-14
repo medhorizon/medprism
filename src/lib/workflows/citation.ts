@@ -369,7 +369,11 @@ export async function buildCitationPatch(args: {
   };
 }
 
-export function citationJudgementPrompt(snapshot: ContextSnapshot, hits: PaperHit[]): string {
+export function citationJudgementPrompt(
+  snapshot: ContextSnapshot,
+  hits: PaperHit[],
+  userText: string,
+): string {
   return [
     formatWorkspaceContext(snapshot),
     taggedPromptData(
@@ -380,17 +384,29 @@ export function citationJudgementPrompt(snapshot: ContextSnapshot, hits: PaperHi
     taggedPromptData(
       "user_request",
       "",
-      { text: "Evaluate citations for the selected claim only." },
+      { text: userText.trim() || "Evaluate citations for the selected claim only." },
     ),
   ].join("\n\n");
 }
 
-function invalidCitationResult(message: string, content = ""): WorkflowResult {
+function invalidCitationResult(
+  message: string,
+  content = "",
+  extraNotes: string[] = [],
+): WorkflowResult {
   return {
     agent: emptyAgentResult("citation", "Citation workflow did not produce an applicable result", [message]),
     content: content || message,
-    toolNotes: [],
+    toolNotes: extraNotes,
   };
+}
+
+function citationJsonRetryPrompt(error: string): string {
+  return taggedPromptData("runtime_rejection", "", {
+    error,
+    instruction:
+      "The previous result could not be applied. Return one JSON envelope for the same citation request with citationPlan only. Evaluate only trusted candidate IDs. Do not generate doi, pmid, citeKey, bibtex, patchProposal, textDraft, or review.",
+  });
 }
 
 /** Runtime guard for a combined “polish + cite” request. */
@@ -485,38 +501,74 @@ export const runCitationWorkflow: WorkflowHandler = async (input) => {
     return invalidCitationResult("未找到足够相关的文献，未生成引用。");
   }
 
-  const raw = await input.services.complete({
-    config: input.config,
-    messages: [
-      {
-        role: "system",
-        content: buildWorkflowSystemPrompt({
-          workflow: "citation",
-          skillId: "nature-citation",
-          skill: natureCitationSkill,
-          capabilities: ["research", "latex-output"],
-        }),
-      },
-      { role: "user", content: citationJudgementPrompt(snapshot, hits) },
-    ],
-  });
-  const parsed = parseModelWorkflowEnvelope(raw, "citation");
-  if (!parsed.ok) return invalidCitationResult(parsed.error.message, parsed.rawContent);
-  if (
-    parsed.envelope.proposal ||
-    parsed.envelope.textDraftValue !== undefined ||
-    parsed.envelope.reviewValue !== undefined
-  ) {
-    return invalidCitationResult(
-      "Citation judgement returned a file-edit payload instead of a CitationPlan",
-      parsed.envelope.content,
-    );
+  const messages = [
+    {
+      role: "system" as const,
+      content: buildWorkflowSystemPrompt({
+        workflow: "citation",
+        skillId: "nature-citation",
+        skill: natureCitationSkill,
+        capabilities: ["research", "latex-output"],
+      }),
+    },
+    { role: "user" as const, content: citationJudgementPrompt(snapshot, hits, input.request.userText) },
+  ];
+
+  const applyRaw = (raw: string):
+    | {
+        status: "ok";
+        envelope: Extract<ReturnType<typeof parseModelWorkflowEnvelope>, { ok: true }>["envelope"];
+      }
+    | { status: "unusable-json"; error: string; content: string } => {
+    const parsed = parseModelWorkflowEnvelope(raw, "citation");
+    if (!parsed.ok) {
+      return { status: "unusable-json", error: parsed.error.message, content: parsed.rawContent };
+    }
+    if (
+      parsed.envelope.proposal ||
+      parsed.envelope.textDraftValue !== undefined ||
+      parsed.envelope.reviewValue !== undefined
+    ) {
+      return {
+        status: "unusable-json",
+        error: "Citation judgement returned a file-edit payload instead of a CitationPlan",
+        content: parsed.envelope.content,
+      };
+    }
+    if (parsed.envelope.citationPlanValue === undefined) {
+      return {
+        status: "unusable-json",
+        error: "Citation workflow did not return citationPlan",
+        content: parsed.envelope.content,
+      };
+    }
+    return { status: "ok", envelope: parsed.envelope };
+  };
+
+  const raw = await input.services.complete({ config: input.config, messages });
+  let attempt = applyRaw(raw);
+  let retried = false;
+  if (attempt.status === "unusable-json") {
+    retried = true;
+    const retriedRaw = await input.services.complete({
+      config: input.config,
+      messages: [
+        ...messages,
+        { role: "assistant", content: raw },
+        { role: "user", content: citationJsonRetryPrompt(attempt.error) },
+      ],
+    });
+    attempt = applyRaw(retriedRaw);
+    if (attempt.status === "unusable-json") {
+      return invalidCitationResult(attempt.error, attempt.content, ["model-result-retried"]);
+    }
   }
-  if (parsed.envelope.citationPlanValue === undefined) {
-    return invalidCitationResult("Citation workflow did not return citationPlan", parsed.envelope.content);
+
+  const judged = parseCitationJudgements(attempt.envelope.citationPlanValue, hits);
+  const retryNotes = retried ? ["model-result-retried"] : [];
+  if (!judged.ok) {
+    return invalidCitationResult(judged.error.message, attempt.envelope.content, retryNotes);
   }
-  const judged = parseCitationJudgements(parsed.envelope.citationPlanValue, hits);
-  if (!judged.ok) return invalidCitationResult(judged.error.message, parsed.envelope.content);
 
   const revision = await optionalProseRevision(input, snapshot, hits);
   const built = await buildCitationPatch({
@@ -527,10 +579,12 @@ export const runCitationWorkflow: WorkflowHandler = async (input) => {
       ? { replacementClaim: revision.replacementClaim }
       : {}),
   });
-  if (!built.ok) return invalidCitationResult(built.error.message, parsed.envelope.content);
+  if (!built.ok) {
+    return invalidCitationResult(built.error.message, attempt.envelope.content, retryNotes);
+  }
 
   const workflowWarnings = [
-    ...parsed.envelope.warnings,
+    ...attempt.envelope.warnings,
     ...built.plan.warnings,
     ...input.research.warnings,
     ...(revision.warning ? [revision.warning] : []),
@@ -539,7 +593,7 @@ export const runCitationWorkflow: WorkflowHandler = async (input) => {
   if (patch) {
     const finalized = await finalizePatchSet(snapshot, patch);
     if (!finalized.ok) {
-      return invalidCitationResult(finalized.error.message, parsed.envelope.content);
+      return invalidCitationResult(finalized.error.message, attempt.envelope.content, retryNotes);
     }
     patch = finalized.patchSet;
   }
@@ -547,7 +601,7 @@ export const runCitationWorkflow: WorkflowHandler = async (input) => {
   const selectedSupportCount = built.plan.candidates.filter(
     (candidate) => candidate.selected && candidate.relation === "supports",
   ).length;
-  const content = parsed.envelope.content || (patch
+  const content = attempt.envelope.content || (patch
     ? `已验证 ${selectedSupportCount} 条候选引用并生成可审阅补丁。`
     : workflowWarnings.join(" ") || "没有需要写入项目的引用变更。");
 
@@ -555,12 +609,12 @@ export const runCitationWorkflow: WorkflowHandler = async (input) => {
     agent: {
       schemaVersion: "1",
       workflow: "citation",
-      summary: parsed.envelope.summary,
+      summary: attempt.envelope.summary,
       warnings: workflowWarnings,
       citationPlan: built.plan,
       ...(patch ? { patch } : {}),
     },
     content,
-    toolNotes: [`research-consumed:${hits.length}`, "skill:nature-citation"],
+    toolNotes: [`research-consumed:${hits.length}`, "skill:nature-citation", ...retryNotes],
   };
 };

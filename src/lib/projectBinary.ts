@@ -39,25 +39,80 @@ export function compiledPdfPath(mainFile: string): string {
   return mainFile.replace(/\.tex$/i, ".pdf");
 }
 
-/** Drop the generated PDF while preserving binary source assets for Tectonic. */
+const COMPILE_ATTACHMENT_EXT = /\.(png|jpe?g|gif|webp|pdf)$/i;
+
+function graphicsReferences(files: Record<string, string>): Set<string> {
+  const refs = new Set<string>();
+  for (const [path, content] of Object.entries(files)) {
+    if (!path.toLowerCase().endsWith(".tex") || isBinaryFileContent(content)) continue;
+    for (const match of content.matchAll(/\\includegraphics(?:\s*\[[^\]]*\])?\s*\{([^}]+)\}/gi)) {
+      const raw = match[1]!.trim().replace(/\\/g, "/").replace(/^\.\//, "");
+      if (!raw) continue;
+      refs.add(raw.toLowerCase());
+      refs.add(raw.replace(/\.[^.]+$/, "").toLowerCase());
+      const base = raw.split("/").pop();
+      if (base) {
+        refs.add(base.toLowerCase());
+        refs.add(base.replace(/\.[^.]+$/, "").toLowerCase());
+      }
+    }
+  }
+  return refs;
+}
+
+function isUnreferencedAttachment(
+  path: string,
+  content: string,
+  refs: Set<string>,
+): boolean {
+  if (!isBinaryFileContent(content) || !COMPILE_ATTACHMENT_EXT.test(path)) return false;
+  const slash = path.replace(/\\/g, "/").toLowerCase();
+  const base = slash.split("/").pop() ?? slash;
+  const stem = base.replace(/\.[^.]+$/, "");
+  return !(
+    refs.has(slash) ||
+    refs.has(slash.replace(/\.[^.]+$/, "")) ||
+    refs.has(base) ||
+    refs.has(stem)
+  );
+}
+
+/** Drop generated PDF and unused image attachments; keep only graphics the .tex cites. */
 export function filesForCompile(
   files: Record<string, string>,
   mainFile?: string,
 ): Record<string, string> {
   const out: Record<string, string> = {};
   const generatedPdf = mainFile ? compiledPdfPath(mainFile).toLowerCase() : null;
+  const refs = graphicsReferences(files);
   for (const [path, content] of Object.entries(files)) {
     const lowerPath = path.toLowerCase();
-    if (
-      generatedPdf
-        ? lowerPath === generatedPdf
-        : isBinaryFileContent(content) && lowerPath.endsWith(".pdf")
-    ) {
+    if (generatedPdf ? lowerPath === generatedPdf : isBinaryFileContent(content) && lowerPath.endsWith(".pdf")) {
       continue;
     }
+    if (isUnreferencedAttachment(path, content, refs)) continue;
     out[path] = content;
   }
   return out;
+}
+
+/** True when the only file-map differences are binary image/PDF attachments. */
+export function onlyBinaryAttachmentChanges(
+  before: Record<string, string>,
+  after: Record<string, string>,
+): boolean {
+  const keys = new Set([...Object.keys(before), ...Object.keys(after)]);
+  for (const path of keys) {
+    if (before[path] === after[path]) continue;
+    const contents = [before[path], after[path]].filter((value): value is string => value !== undefined);
+    if (
+      contents.some((content) => !isBinaryFileContent(content)) ||
+      !COMPILE_ATTACHMENT_EXT.test(path)
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 export function fileBytesForExport(content: string): Uint8Array {

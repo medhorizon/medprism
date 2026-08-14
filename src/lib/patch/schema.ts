@@ -115,7 +115,9 @@ export type PatchValidationErrorCode =
   | "BIB_ENTRY_MISMATCH"
   | "BIBLIOGRAPHY_NOT_CONFIGURED"
   | "RESOURCE_NOT_FOUND"
-  | "TEX_TRAILING_CONTENT";
+  | "TEX_TRAILING_CONTENT"
+  | "WRONG_WORKFLOW"
+  | "RUNTIME_OWNED_FIELD";
 
 export type PatchValidationError = {
   code: PatchValidationErrorCode;
@@ -136,8 +138,27 @@ function invalid(message: string): ParsePatchResult {
   return { ok: false, error: { code: "INVALID_PATCH", message } };
 }
 
-function invalidProposal(message: string): ParseProposalResult {
-  return { ok: false, error: { code: "INVALID_PATCH", message } };
+function invalidProposal(
+  message: string,
+  code: PatchValidationErrorCode = "INVALID_PATCH",
+): ParseProposalResult {
+  return { ok: false, error: { code, message } };
+}
+
+/** Fail-closed safety rejects. Format/bookkeeping errors are not this set. */
+export function isSafetyValidationError(code: PatchValidationErrorCode): boolean {
+  return (
+    code === "WRONG_WORKFLOW" ||
+    code === "RUNTIME_OWNED_FIELD" ||
+    code === "UNSAFE_PATH" ||
+    code === "OLD_TEXT_NOT_FOUND" ||
+    code === "OLD_TEXT_NOT_UNIQUE" ||
+    code === "ANCHOR_NOT_FOUND" ||
+    code === "ANCHOR_NOT_UNIQUE" ||
+    code === "RANGE_MISMATCH" ||
+    code === "FILE_NOT_FOUND" ||
+    code === "TEX_TRAILING_CONTENT"
+  );
 }
 
 function strictCompileFlag(value: unknown): { ok: true; value?: boolean } | { ok: false } {
@@ -310,19 +331,27 @@ export function parsePatchSet(value: unknown): ParsePatchResult {
   }
 }
 
-export function parseModelPatchProposal(value: unknown): ParseProposalResult {
+class RuntimeOwnedFieldError extends Error {
+  readonly code = "RUNTIME_OWNED_FIELD" as const;
+}
+
+export function parseModelPatchProposal(
+  value: unknown,
+  derived?: { summary?: string },
+): ParseProposalResult {
   if (!value || typeof value !== "object") return invalidProposal("Patch proposal must be an object");
   const raw = value as Record<string, unknown>;
-  const schemaVersion =
-    raw.schemaVersion === 1 || raw.schemaVersion === PATCH_SCHEMA_VERSION
-      ? PATCH_SCHEMA_VERSION
-      : raw.schemaVersion;
-  if (schemaVersion !== PATCH_SCHEMA_VERSION) {
+  if (raw.schemaVersion !== undefined && raw.schemaVersion !== 1 && raw.schemaVersion !== PATCH_SCHEMA_VERSION) {
     return invalidProposal(
-      `patchProposal.schemaVersion must be "1" or 1; received ${String(raw.schemaVersion ?? "<missing>")}`,
+      `patchProposal.schemaVersion must be "1" or 1; received ${String(raw.schemaVersion)}`,
     );
   }
-  if (typeof raw.summary !== "string") return invalidProposal("summary must be a string");
+  const summary =
+    typeof derived?.summary === "string"
+      ? derived.summary
+      : typeof raw.summary === "string"
+        ? raw.summary
+        : "";
   if (!Array.isArray(raw.operations) || raw.operations.length === 0) {
     return invalidProposal("operations must be a non-empty array");
   }
@@ -335,6 +364,7 @@ export function parseModelPatchProposal(value: unknown): ParseProposalResult {
   if (forbiddenProposalField) {
     return invalidProposal(
       `Model patch proposals must not contain runtime-owned field ${forbiddenProposalField}`,
+      "RUNTIME_OWNED_FIELD",
     );
   }
 
@@ -354,7 +384,7 @@ export function parseModelPatchProposal(value: unknown): ParseProposalResult {
         "pmid",
       ].find((field) => op[field] !== undefined);
       if (forbiddenOperationField) {
-        throw new Error(
+        throw new RuntimeOwnedFieldError(
           `Model edit operation must not contain runtime-owned field ${forbiddenOperationField}`,
         );
       }
@@ -366,7 +396,7 @@ export function parseModelPatchProposal(value: unknown): ParseProposalResult {
         return {
           op: "replace_text",
           ...(optionalPath ? { path: optionalPath } : {}),
-          oldText: checkedText(op.oldText, "replace_text.oldText"),
+          oldText: op.oldText === undefined ? "" : checkedText(op.oldText, "replace_text.oldText"),
           newText: checkedText(op.newText, "replace_text.newText"),
         };
       }
@@ -391,7 +421,7 @@ export function parseModelPatchProposal(value: unknown): ParseProposalResult {
       ok: true,
       proposal: {
         schemaVersion: PATCH_SCHEMA_VERSION,
-        summary: raw.summary,
+        summary,
         operations,
       },
     };
@@ -399,7 +429,12 @@ export function parseModelPatchProposal(value: unknown): ParseProposalResult {
     return {
       ok: false,
       error: {
-        code: error instanceof UnsafeProjectPathError ? "UNSAFE_PATH" : "INVALID_PATCH",
+        code:
+          error instanceof UnsafeProjectPathError
+            ? "UNSAFE_PATH"
+            : error instanceof RuntimeOwnedFieldError
+              ? "RUNTIME_OWNED_FIELD"
+              : "INVALID_PATCH",
         message: error instanceof Error ? error.message : String(error),
       },
     };

@@ -243,7 +243,8 @@ export function inferLatexTargetKindFromDraft(text: string): LatexTargetKind | n
   const headingMatch = text.match(
     /\\(?:section\*?|subsection\*?|bmhead)\s*(?:\[[^\]]*\]\s*)?\{([^}]+)\}/i,
   );
-  const haystack = normalizeHeading(headingMatch?.[1] ?? text.slice(0, 240));
+  // Only headings count. Figure paths like result.png must not infer "results".
+  const haystack = headingMatch?.[1] ? normalizeHeading(headingMatch[1]) : "";
   if (!haystack) return null;
 
   let best: { kind: LatexTargetKind; score: number } | null = null;

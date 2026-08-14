@@ -12,8 +12,6 @@ Every model step returns exactly one JSON object owned by the active workflow. T
   "warnings": [],
   "content": "Optional user-facing explanation",
   "patchProposal": {
-    "schemaVersion": "1",
-    "summary": "Short edit label",
     "operations": [
       {
         "op": "replace_text",
@@ -33,10 +31,11 @@ Every model step returns exactly one JSON object owned by the active workflow. T
 
 ## Patch-proposal rules
 
+- `patchProposal` contains only `operations`. `path` on an operation is optional when the runtime supplied one active file.
+- Do not emit `patchProposal.schemaVersion` or an inner `summary`. The runtime copies those from the envelope.
 - Existing text uses `replace_text`.
 - Insertions use `insert_before` or `insert_after` with one unique anchor.
-- Selection-scoped editing uses the exact selected text as `oldText`.
-- `path` may be omitted when the runtime supplied one active file.
+- `oldText` must be copied verbatim from the supplied `.tex` source. The user message, PDF appearance, and rendered labels are the request, not the locate key. Empty `newText` deletes that source span.
 - Never append replacement prose to `.tex` EOF or after `\end{document}`.
 - Never return a whole-file rewrite when a local edit is possible.
 - If the target cannot be located safely, omit `patchProposal` and explain the limitation.

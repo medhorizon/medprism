@@ -48,9 +48,13 @@ jobs:
           name: binaries-${{ matrix.os }}
           path: |
             release/*.AppImage
-            release/*portable*.exe
+            release/*.AppImage.blockmap
+            release/*.exe
+            release/*.exe.blockmap
             release/*.dmg
             release/*.zip
+            release/*.zip.blockmap
+            release/*.yml
           if-no-files-found: warn
 
   publish:

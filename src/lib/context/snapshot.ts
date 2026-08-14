@@ -266,12 +266,22 @@ export async function buildContextSnapshot(input: ContextInput): Promise<Context
 
 export const buildContextPackage = buildContextSnapshot;
 
+function texDocuments(snapshot: ContextSnapshot): Array<{ path: string; content: string }> {
+  return snapshot.fileTree
+    .filter((file) => file.kind === "tex" && file.path !== snapshot.mainFile)
+    .map((file) => ({
+      path: file.path,
+      content: isBinaryFileContent(snapshot.files[file.path]!) ? "" : snapshot.files[file.path]!,
+    }));
+}
+
 export function formatWorkspaceContext(snapshot: ContextSnapshot): string {
   return taggedPromptData("workspace_context", 'schemaVersion="1" trust="untrusted-data"', {
     schemaVersion: snapshot.schemaVersion,
     projectRevision: snapshot.projectRevision,
     fileTree: snapshot.fileTree,
     mainDocument: snapshot.mainDocument ?? null,
+    texDocuments: texDocuments(snapshot),
     editor: {
       activeFile: snapshot.activeFile,
       cursor: snapshot.cursor,

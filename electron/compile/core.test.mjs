@@ -62,6 +62,14 @@ describe("bibliography compile validation", () => {
       "note: Rerunning TeX because I was told to\nOutput written on main.xdv",
     )).toBe(false);
     expect(bibliographyFailure("note: warnings were issued by BibTeX")).toBe(false);
+    expect(bibliographyFailure([
+      "note: Running BibTeX on sn-article.aux ...",
+      "I found no \\citation commands---while reading file sn-article.aux",
+      "(There was 1 error message)",
+      "warning: errors were issued by BibTeX, but were ignored",
+      "note: Rerunning TeX because I was told to",
+      "Package natbib Warning: Empty `thebibliography' environment on input line 46.",
+    ].join("\n"))).toBe(false);
   });
 
   it("makes one nested bibliography style visible to root-level BibTeX", () => {

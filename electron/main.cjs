@@ -190,14 +190,21 @@ function createWindow() {
   });
 }
 
-function startAutoUpdate() {
+async function startAutoUpdate() {
   if (!app.isPackaged) return;
   // Portable builds have no installer to replace.
   if (process.env.PORTABLE_EXECUTABLE_DIR) return;
   const { autoUpdater } = require("electron-updater");
+  const { pickReleaseMirror } = require("./releaseMirrors.cjs");
   autoUpdater.on("error", (error) => {
     console.error("auto-update failed:", error);
   });
+  const url = await pickReleaseMirror();
+  if (!url) {
+    console.error("auto-update skipped: no release mirror reachable");
+    return;
+  }
+  autoUpdater.setFeedURL({ provider: "generic", url });
   void autoUpdater.checkForUpdatesAndNotify();
 }
 

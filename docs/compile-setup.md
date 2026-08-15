@@ -2,6 +2,9 @@
 
 MedPrism uses a local **Tectonic** service for real PDF compilation.
 
+Official installers already bundle Tectonic 0.17.0. The steps below are
+for development from source, or if you override the engine.
+
 ## 1. Install Tectonic
 
 - Windows: download from [Tectonic releases](https://github.com/tectonic-typesetting/tectonic/releases) or `scoop install tectonic` / `choco install tectonic`

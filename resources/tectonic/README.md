@@ -1,4 +1,4 @@
-# Optional bundled Tectonic engines
+# Bundled Tectonic engines
 
 MedPrism resolves Tectonic in this order:
 
@@ -6,7 +6,10 @@ MedPrism resolves Tectonic in this order:
 2. packaged `resources/tectonic/<platform>-<arch>/tectonic[.exe]`
 3. `tectonic` on `PATH`
 
-Expected packaged directories include `win32-x64`, `linux-x64`, and
-`darwin-arm64`. Binaries are gitignored; place a reviewed upstream
-`tectonic` / `tectonic.exe` under the matching platform folder before
-`npm run electron:pack:*` so `extraResources` ships it in the portable build.
+`npm run electron:pack:*` downloads Tectonic 0.17.0 into the matching
+folder (`win32-x64`, `linux-x64`, `darwin-arm64`) before electron-builder
+copies it into the installer. Binaries stay gitignored.
+
+```bash
+npm run fetch-tectonic
+```
